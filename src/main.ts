@@ -17,6 +17,8 @@ async function boot(): Promise<void> {
   const db = await Db.open(store, () => seed(new Date()));
   note.remove();
   start(db);
+  // offline use and install: the service worker caches the app shell (see web/sw.js)
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(err => console.warn('Tempo: no offline support', err));
   if (!kept) alert('This browser window cannot store data. Tempo will work, but nothing will be kept when you close it. Use Export to save your data.');
 }
 

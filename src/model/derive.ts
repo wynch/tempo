@@ -176,7 +176,7 @@ export function buildDay(input: DeriveInput, key: DayKey): DayModel {
 
 /** The total shown at the end of a month row, for the current filter. */
 export function monthSummary(days: DayModel[], filter: string, counters: Counter[]): string {
-  const lived = days.filter(d => d.past || d.today);
+  const lived = days.filter(d => (d.past || d.today) && d.items.length);   // days with nothing to count say nothing
   if (!lived.length) return '';
   if (filter === 'all') return Math.round(lived.reduce((a, d) => a + (d.vals.all ?? 0), 0) / lived.length * 100) + '%';
   const c = counters.find(x => x.id === filter);
