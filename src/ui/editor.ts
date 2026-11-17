@@ -106,9 +106,10 @@ function formHtml(d: Draft, parts: { id: string; name: string }[]): string {
     <button data-do="close">Cancel</button><button class="primary" data-do="save">Save</button></footer>`;
 }
 
+/** Slides the sheet away; its content is cleared once it is out of sight. */
 export function closeSheet(host: EditorHost): void {
   host.sheet.classList.remove('open');
-  host.sheet.replaceChildren();
+  setTimeout(() => { if (!sheetOpen(host)) host.sheet.replaceChildren(); }, 320);
 }
 export const sheetOpen = (host: EditorHost): boolean => host.sheet.classList.contains('open');
 
@@ -117,6 +118,7 @@ function panel(host: EditorHost): HTMLElement {
   const p = document.createElement('div');
   p.className = 'panel';
   host.sheet.appendChild(p);
+  void host.sheet.offsetHeight;          // let the browser see the panel off screen first, so it slides up
   host.sheet.classList.add('open');
   host.sheet.onclick = e => { if (e.target === host.sheet) closeSheet(host); };
   return p;
@@ -135,14 +137,14 @@ export function openCounters(host: EditorHost): void {
   p.onclick = e => {
     const b = (e.target as Element).closest<HTMLElement>('[data-do]'); if (!b) return;
     if (b.dataset.do === 'close') closeSheet(host);
-    else if (b.dataset.do === 'new') openEditor(host, null);
-    else if (b.dataset.do === 'edit') openEditor(host, b.dataset.id!);
+    else if (b.dataset.do === 'new') openEditor(host, null, {}, true);
+    else if (b.dataset.do === 'edit') openEditor(host, b.dataset.id!, {}, true);
   };
 }
 
 /** The form for one counter; `id` null makes a new one. */
-export function openEditor(host: EditorHost, id: Id | null): void {
-  const p = panel(host), db = host.db, d = draftOf(db, id);
+export function openEditor(host: EditorHost, id: Id | null, preset: { part?: string } = {}, fromList = false): void {
+  const p = panel(host), db = host.db, d = { ...draftOf(db, id), ...(id ? {} : preset) };
   const draw = (): void => { p.innerHTML = formHtml(d, db.settings.parts); };
   const listOf = (e: HTMLElement): Step[] => (e.dataset.list === 'after' ? d.after : d.steps);
   draw();
@@ -166,7 +168,7 @@ export function openEditor(host: EditorHost, id: Id | null): void {
   p.onclick = e => {
     const b = (e.target as Element).closest<HTMLElement>('[data-do]'); if (!b) return;
     const act = b.dataset.do!, i = Number(b.dataset.i);
-    if (act === 'close') { if (id || !db.counters.length) closeSheet(host); else openCounters(host); return; }
+    if (act === 'close') { if (fromList) openCounters(host); else closeSheet(host); return; }      // back to where it was opened from
     if (act === 'color') d.color = b.dataset.v as ColorKey;
     else if (act === 'kind') { d.kind = b.dataset.v as ItemKind; if (d.kind === 'avoid' && d.rhythm === 'days') d.rhythm = 'daily'; }
     else if (act === 'wd') { const v = Number(b.dataset.v); d.weekdays = d.weekdays.includes(v) ? d.weekdays.filter(x => x !== v) : [...d.weekdays, v].sort(); }

@@ -230,6 +230,7 @@ export function start(db: Db): void {
     it.el.classList.toggle('floating', m.span !== 'day' && !m.placed && !m.done);
     if (it.meas!.textContent !== meas) it.meas!.textContent = meas;
     if (it.btn!.textContent !== glyph) it.btn!.textContent = glyph;
+    it.el.dataset.go = m.kind === 'check' ? (m.done ? 'Undo' : 'Done') : m.kind === 'session' ? 'Play' : '+1';   // what a swipe to the right does
     it.num!.textContent = num;
     syncKids(it);
   }
@@ -270,8 +271,11 @@ export function start(db: Db): void {
     });
     tree.byId.forEach(n => { if (n.lvl === 4) return; n.sig = ''; if (n.sum) n.sum.textContent = monthText(n); fillTray(n); });
     setDirect('f3', clamp(S.f3, 0, Math.max(0, focusCell(3).items.length - 1)));
+    showEmpty();
     dirty = true;
   }
+  /** With nothing to count yet, say how to start. */
+  function showEmpty(): void { byIdEl('empty').classList.toggle('on', !db.counters.length); }
   db.onChange(c => { if ('all' in c) refreshAll(); else refreshDays(c.days); });
 
   /* ---- apply: write the layout to the page ---- */
@@ -324,7 +328,7 @@ export function start(db: Db): void {
     body.style.opacity = lerp(iv * (one ? 0.3 : 1), 1, s.r).toFixed(3);
     n.parts.forEach(p => {
       const q = L[p.id]; if (!q) return;
-      p.el ??= el('div', 'part', body, p.name);
+      if (!p.el) { p.el = el('div', 'part', body, p.name); p.el.dataset.part = db.settings.parts[p.pi - 1]?.id ?? ''; }
       place(p.el, q.x, q.y, q.w, q.h); p.el.style.opacity = q.o.toFixed(3);
     });
     n.items.forEach(it => {
@@ -534,21 +538,27 @@ export function start(db: Db): void {
     clearTimeout(wheelT); wheelT = window.setTimeout(() => { wheelT = 0; settle(); }, 170);
   }, { passive: false });
 
-  interface Gesture { mode: 'tap' | 'pinch' | 'drag' | 'year' | 'refine' | 'none'; chip?: HTMLElement; ghost?: HTMLElement; drop?: Cell; x: number; y: number; t: number; target: Element | null; d0: number; z0: number; key: Key; max: number; start: number; dy: number }
+  interface Gesture { mode: 'tap' | 'pinch' | 'drag' | 'year' | 'refine' | 'swipe' | 'none'; item?: ItemNode; dx: number; chip?: HTMLElement; ghost?: HTMLElement; drop?: Cell; x: number; y: number; t: number; target: Element | null; d0: number; z0: number; key: Key; max: number; start: number; dy: number }
   const ptrs = new Map<number, { x: number; y: number }>();
   let g: Gesture | null = null;
   const mid = (): { x: number; y: number; d: number } => {
     const [a, b] = [...ptrs.values()] as [{ x: number; y: number }, { x: number; y: number }];
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) || 1 };
   };
-  const gesture = (p: Partial<Gesture>): Gesture => ({ mode: 'none', x: 0, y: 0, t: 0, target: null, d0: 1, z0: 0, key: 'z', max: 0, start: 0, dy: 0, ...p });
+  const gesture = (p: Partial<Gesture>): Gesture => ({ mode: 'none', dx: 0, x: 0, y: 0, t: 0, target: null, d0: 1, z0: 0, key: 'z', max: 0, start: 0, dy: 0, ...p });
   stage.addEventListener('pointerdown', e => {
     if (inSheet(e.target)) return;
     seq++;
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const chip = (e.target as Element).closest<HTMLElement>('.chip[data-cid]');
     if (ptrs.size === 1 && chip) { g = gesture({ mode: 'refine', x: e.clientX, y: e.clientY, chip }); return; }
-    if (ptrs.size === 1) g = gesture({ mode: 'tap', x: e.clientX, y: e.clientY, t: performance.now(), target: e.target as Element });
+    if (ptrs.size === 1) {
+      g = gesture({ mode: 'tap', x: e.clientX, y: e.clientY, t: performance.now(), target: e.target as Element });
+      // a long press edits what is under the finger; the row shows the press building up
+      const target = e.target as Element, row = rowAt(target);
+      if (row) { pressed = row.el!; pressed.classList.add('pressing'); }
+      holdT = window.setTimeout(() => { if (g?.mode === 'tap') { g.mode = 'none'; hold(target); } endPress(); }, HOLD_MS);
+    } else endPress();
     if (ptrs.size === 2) { const c = mid(); pickFocus(c.x, c.y); g = gesture({ mode: 'pinch', d0: c.d, z0: S.z }); }
   });
   window.addEventListener('pointermove', e => {
@@ -556,7 +566,24 @@ export function start(db: Db): void {
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (g.mode === 'refine') { refineMove(g, e.clientX, e.clientY); return; }
     if (g.mode === 'pinch' && ptrs.size >= 2) { const c = mid(); zoomTo(g.z0 + Math.log2(c.d / g.d0) * 0.95, c.x, c.y); return; }
+    if (g.mode === 'tap' && Math.abs(e.clientX - g.x) > 9 && Math.abs(e.clientX - g.x) > Math.abs(e.clientY - g.y)) {
+      // sideways on a row of the open day: the row follows the finger and shows what letting go will do
+      const row = rowAt(g.target);
+      endPress();
+      if (row && Math.round(S.z) === 3 && row.parent === focusCell(3)) { g.mode = 'swipe'; g.item = row; row.el!.classList.add('swiping'); }
+      else g.mode = 'none';
+      return;
+    }
+    if (g.mode === 'swipe') {
+      const e2 = g.item!.el!;
+      g.dx = clamp(e.clientX - g.x, -SWIPE_MAX, SWIPE_MAX);
+      e2.style.translate = px(g.dx) + ' 0';
+      e2.style.setProperty('--sw', String(Math.min(1, Math.abs(g.dx) / SWIPE_AT)));
+      e2.classList.toggle('armed', Math.abs(g.dx) >= SWIPE_AT);
+      return;
+    }
     if (g.mode === 'tap' && Math.abs(e.clientY - g.y) > 9) {
+      endPress();
       const Lc = Math.round(S.z);
       g.mode = Lc >= 1 ? 'drag' : 'year';       // at the year, a vertical flick turns to the next or previous year
       g.y = e.clientY;
@@ -572,7 +599,15 @@ export function start(db: Db): void {
   function pointerEnd(e: PointerEvent): void {
     if (!ptrs.has(e.pointerId)) return;
     ptrs.delete(e.pointerId);
+    endPress();
     if (!g) return;
+    if (g.mode === 'swipe') {
+      const row = g.item!, e2 = row.el!, go = e.type === 'pointerup' && Math.abs(g.dx) >= SWIPE_AT ? Math.sign(g.dx) : 0;
+      e2.classList.remove('swiping', 'armed'); e2.style.translate = '';      // the stylesheet eases it back
+      g = null;
+      if (go > 0) action(row); else if (go < 0) openEditor(host, row.model.counter.id);
+      return;
+    }
     if (g.mode === 'refine') { refineEnd(g, e.type === 'pointerup'); g = null; return; }
     if (g.mode === 'pinch') { if (ptrs.size < 2) { settle(); g = gesture({}); } return; }
     if (g.mode === 'year') { if (Math.abs(g.dy) > 70) gotoYear(year + (g.dy < 0 ? 1 : -1)); }
@@ -585,6 +620,23 @@ export function start(db: Db): void {
   }
   window.addEventListener('pointerup', pointerEnd);
   window.addEventListener('pointercancel', pointerEnd);
+
+  /* Direct editing. A long press on a row opens its counter; on the open day's background or a part-of-day
+     heading it starts a new counter there. A row of the open day also swipes: right for its own action, left to edit. */
+  const HOLD_MS = 480, SWIPE_AT = 72, SWIPE_MAX = 124;
+  let holdT = 0, pressed: HTMLElement | null = null;
+  const rowAt = (t: Element | null): ItemNode | undefined => {
+    const n = nodeAt(t);
+    return n && n.lvl === 4 && n.el?.classList.contains('row') ? n : undefined;
+  };
+  function endPress(): void { clearTimeout(holdT); pressed?.classList.remove('pressing'); pressed = null; }
+  function hold(t: Element): void {
+    const row = rowAt(t);
+    if (row) { openEditor(host, row.model.counter.id); return; }
+    if (Math.round(S.z) !== 3 || t.closest('[data-act]')) return;
+    const n = nodeAt(t);
+    if (n && upTo(n, 3) === focusCell(3)) openEditor(host, null, { part: t.closest<HTMLElement>('.part')?.dataset.part ?? '' });
+  }
 
   /* Refine: drag a floating plan's chip from the tray onto a day to pin it there ("gym 3× this week" → "on Thursday").
      Dropping it on a day where it is already pinned takes the pin away. */
@@ -689,6 +741,7 @@ export function start(db: Db): void {
     const it = focusItem();
     if (a !== 'menu') menu.classList.remove('open');
     if (a === 'crumb') glide('z', Number(e.dataset.l));
+    else if (a === 'new') openEditor(host, null);
     else if (a === 'filter') setFilter(e.dataset.key!);
     else if (a === 'year') gotoYear(year + Number(e.dataset.d));
     else if (a === 'now') {
@@ -750,6 +803,7 @@ export function start(db: Db): void {
   }
   window.addEventListener('resize', resize);
   resize();
+  showEmpty();
   // for poking at it from the console
   (window as unknown as { tempo: unknown }).tempo = { S, db, tree, glide, setDirect, setFilter, apply, frame, monthOf: (i: number) => MONTHS[i], get L() { return L; } };
   requestAnimationFrame(frame);
