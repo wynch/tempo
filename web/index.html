@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#faf8f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1b19" media="(prefers-color-scheme: dark)">
+<title>Tempo</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="stage">
+  <div id="wk">
+    <span class="brand">Tempo</span>
+    <div id="crumbs"></div>
+    <button class="hbtn nowbtn" data-act="now">Now</button>
+    <button class="hbtn" data-act="menu" aria-label="Menu">⋯</button>
+  </div>
+  <div id="surface"><div id="boot">Opening…</div></div>
+  <div id="now"><span></span></div>
+  <div id="ctl">
+    <button data-act="reset" aria-label="Reset">↺</button>
+    <button class="play" data-act="play" aria-label="Play or pause">▶</button>
+    <button data-act="skip" aria-label="Skip step">⏭</button>
+  </div>
+  <div id="menu">
+    <button data-act="export">Export data<small>Save everything as one file</small></button>
+    <button data-act="import">Import data<small>Replace everything from a file</small></button>
+    <button data-act="sample">Load sample data<small>Replace everything with the demo</small></button>
+  </div>
+  <input type="file" id="file" accept="application/json,.json" hidden>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

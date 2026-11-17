@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Tempo — zoom motion study</title>
+<style>
+:root{
+  --bg:#ece8df; --paper:#faf8f3; --card:#ffffff; --ink:#1e1c19; --mute:#8b867c; --line:#e4dfd3;
+  --now:#e2562b;
+  --gym:#4b55c9; --water:#1f93a8; --meds:#3d9a5f; --cig:#8c6f5a; --stretch:#8a56c2; --call:#c98a1a;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#111210; --paper:#1a1b19; --card:#242523; --ink:#eceae4; --mute:#8e8b83; --line:#30312e;
+    --now:#ff7a4d; --gym:#8089f2; --water:#4cc0d4; --meds:#63c487; --cig:#b89a85; --stretch:#b68aea; --call:#e6ad45; }
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.25 system-ui,-apple-system,"Segoe UI",sans-serif;
+  display:flex;align-items:center;justify-content:center;gap:28px;overflow:hidden;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+
+#stage{position:relative;width:min(430px,100vw);height:min(860px,100dvh);background:var(--paper);
+  overflow:hidden;touch-action:none;border-radius:26px;box-shadow:0 20px 60px rgba(0,0,0,.14)}
+@media (max-width:760px){ #stage{border-radius:0;box-shadow:none;height:100dvh} }
+
+/* header: the breadcrumb of the cells you are inside */
+#wk{position:absolute;left:0;top:0;right:0;height:44px;z-index:5;background:var(--paper);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;padding:0 12px 0 14px;overflow:hidden}
+#wk .brand{color:var(--mute);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+#crumbs{display:flex;align-items:center;min-width:0}
+.crumb{font-weight:600;white-space:nowrap;overflow:hidden;padding:6px 0}
+.crumb+.crumb::before{content:"›";color:var(--mute);font-weight:400;margin:0 6px}
+#wk .hbtn{font-size:12px;padding:4px 9px;border-radius:99px;border:1px solid var(--line);color:var(--mute)}
+#wk .nowbtn{color:var(--now);border-color:color-mix(in srgb,var(--now) 40%,transparent);margin-left:auto}
+#tunebtn{display:none}
+@media (max-width:760px){ #tunebtn{display:block} }
+
+#surface{position:absolute;left:0;right:0;top:44px;bottom:0;overflow:hidden}
+.node,.nbody,.part,.item,.item-body,.kid{position:absolute;left:0;top:0}
+
+/* a cell: mark (r=0) -> row (r=1) -> opened (m=1) */
+.node{--r:0;--m:0;overflow:hidden}
+.node>.bg{position:absolute;inset:0;background:var(--paper);border-top:1px solid var(--line);opacity:var(--r)}
+.l3>.heat{position:absolute;inset:0;border-radius:2.5px;box-shadow:inset 0 0 0 1px var(--line);
+  background:color-mix(in srgb,var(--hc,var(--meds)) calc(var(--sc,0)*100%),transparent)}
+.l3.future>.heat{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--line) 55%,transparent)}
+.l3.today>.heat{box-shadow:inset 0 0 0 2px var(--now)}
+.sum{position:absolute;right:12px;top:0;z-index:2;font-size:12px;line-height:16px;color:var(--mute);white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.legend{position:absolute;right:10px;top:10px;z-index:3;display:flex;gap:5px}
+.legend button{font-size:11px;line-height:16px;padding:2px 7px;border-radius:99px;border:1px solid var(--line);color:var(--mute)}
+.legend button.on{background:var(--c);border-color:var(--c);color:var(--paper)}
+.lab{position:absolute;left:0;top:0;white-space:nowrap;z-index:2;line-height:20px;
+  font-size:calc(10px + 5px*var(--r) + 5px*var(--m))}
+.lab b,.lab i{font-weight:650;font-style:normal}
+.lab span{color:var(--mute);margin-left:6px}
+.lab i{display:inline-block;vertical-align:bottom;overflow:hidden;max-width:calc(120px*var(--m));opacity:var(--m)}
+.l3>.lab b{display:inline-block;vertical-align:bottom;overflow:hidden;max-width:calc(48px*var(--r));opacity:var(--r)}
+.l3>.lab span{margin-left:calc(6px*var(--r))}
+.l2>.lab span{opacity:var(--m)}
+.lab em{display:block;font-style:normal;color:var(--mute);font-size:10px;line-height:10px;margin-top:-2px;letter-spacing:.06em;text-transform:uppercase}
+.l3>.lab{line-height:calc(12px + 8px*var(--r))}
+.today>.lab b,.today>.lab span{color:var(--now)}
+.nbody{overflow:hidden}
+
+.part{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);
+  display:flex;align-items:flex-end;padding:0 4px 5px;overflow:hidden;white-space:nowrap}
+
+/* an item is one element at every depth: mark -> row -> opened */
+.item{--r:0;--m:0;--p:0;--co:0}
+.item .card{position:absolute;inset:0;background:var(--card);border-radius:calc(12px - 12px*var(--m));
+  opacity:var(--r);box-shadow:0 1px 0 var(--line)}
+.item .mark{position:absolute;left:var(--mx,0px);top:var(--my,0px);width:var(--s,18px);height:var(--s,18px);
+  border:solid var(--c);border-width:min(2px,calc(var(--s,18px)*.22));border-radius:min(5px,calc(var(--s,18px)*.3));overflow:hidden}
+.item .mark i{position:absolute;left:0;right:0;bottom:0;height:calc(var(--p)*100%);background:var(--c);transition:height .28s}
+.item .mark b{position:absolute;inset:0;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;
+  opacity:calc((1 - var(--r)*2)*(var(--sn,18) - 13)/5)}
+.item.optional .mark{border-style:dashed}
+.item.missed .mark{border-style:dashed;opacity:.4}
+.item .name,.item .meas,.item .btn{opacity:var(--co,0)}
+.item .name{position:absolute;left:46px;top:19px;font-weight:600;white-space:nowrap;
+  font-size:calc(15px + 3px*var(--m))}
+.item.haskids .name{top:calc(9px + 9px*var(--m))}
+.item .meas{position:absolute;right:58px;top:20px;color:var(--mute);font-size:13px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.item.haskids .meas{top:calc(10px + 10px*var(--m))}
+.item .btn{position:absolute;right:10px;top:10px;width:36px;height:36px;border-radius:50%;
+  border:1.5px solid color-mix(in srgb,var(--c) 55%,transparent);color:var(--c);font-size:14px;font-weight:700;
+  display:grid;place-items:center;pointer-events:none;transition:background .2s,color .2s}
+.item.row .btn{pointer-events:auto}
+.item.done .btn.fillable{background:var(--c);color:#fff}
+.item-body{overflow:hidden}
+
+.kid{--m:0;--cur:0;--p:0;border-radius:calc(3px + 8px*var(--m));overflow:hidden;
+  background:color-mix(in srgb,var(--c) 13%,transparent)}
+.kid.rest{--c:var(--mute)}
+.kid .kf{position:absolute;left:0;top:0;width:0;height:0;background:var(--c);opacity:calc(1 - .7*var(--m))}
+.kid .kl,.kid .kr,.kid .kc{position:absolute;white-space:nowrap;opacity:var(--co,0)}
+.kid .kl{left:14px;top:calc(12px + 4px*var(--cur));font-weight:600;font-size:calc(15px + 8px*var(--cur))}
+.kid .kl small{font-weight:400;color:var(--mute);margin-left:8px;font-size:12px}
+.kid .kr{right:14px;top:13px;color:var(--mute);font-size:13px;font-variant-numeric:tabular-nums;
+  opacity:calc(var(--co,0)*(1 - var(--cur)*1.5))}
+.kid .kc{right:14px;bottom:12px;font-size:64px;line-height:1;font-weight:300;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;opacity:calc(var(--co,0)*(var(--cur) - .3)*1.5)}
+
+/* the single now line */
+#now{position:absolute;left:0;right:0;top:0;height:0;z-index:4;pointer-events:none;will-change:transform}
+#now::before{content:"";position:absolute;left:0;right:0;top:-1px;height:2px;background:var(--now);opacity:var(--la,1)}
+#now::after{content:"";position:absolute;left:5px;top:-4px;width:8px;height:8px;border-radius:50%;background:var(--now)}
+#now span{position:absolute;right:8px;top:-17px;font-size:11px;color:var(--now);font-variant-numeric:tabular-nums}
+
+/* run controls */
+#ctl{position:absolute;left:0;right:0;bottom:0;height:84px;z-index:6;display:flex;align-items:center;justify-content:center;gap:26px;
+  background:linear-gradient(to top,var(--paper) 62%,transparent);opacity:0;pointer-events:none}
+#ctl button{width:46px;height:46px;border-radius:50%;border:1.5px solid var(--line);font-size:16px;color:var(--mute)}
+#ctl .play{width:60px;height:60px;background:var(--gym);border-color:var(--gym);color:#fff;font-size:20px}
+
+/* tuning panel */
+#tune{width:250px;font-size:13px;color:var(--mute)}
+#tune h1{font-size:15px;color:var(--ink);margin-bottom:4px}
+#tune p{margin-bottom:14px}
+#tune label{display:block;margin:10px 0 2px}
+#tune label b{float:right;color:var(--ink);font-variant-numeric:tabular-nums;font-weight:500}
+#tune input[type=range]{width:100%;accent-color:var(--now)}
+#tune .chk{display:flex;gap:8px;align-items:center;margin-top:12px}
+#hud{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums;color:var(--ink)}
+#hud small{display:block;color:var(--mute);margin-top:6px;line-height:1.5}
+@media (max-width:760px){
+  #tune{display:none;position:fixed;left:10px;right:10px;bottom:10px;width:auto;z-index:20;background:var(--card);
+    padding:14px 16px;border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+  #tune.open{display:block}
+}
+@media (prefers-reduced-motion:reduce){ .item .mark i{transition:none} }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wk">
+    <span class="brand">Tempo</span>
+    <div id="crumbs"></div>
+    <button class="hbtn nowbtn" data-act="now">Now</button>
+    <button class="hbtn" id="tunebtn" data-act="tune">Tune</button>
+  </div>
+  <div id="surface"></div>
+  <div id="now"><span>17:40</span></div>
+  <div id="ctl">
+    <button data-act="reset" aria-label="Reset">↺</button>
+    <button class="play" data-act="play" aria-label="Play or pause">▶</button>
+    <button data-act="skip" aria-label="Skip step">⏭</button>
+  </div>
+</div>
+
+<aside id="tune">
+  <h1>Zoom motion study</h1>
+  <p>Sample data. Scroll or pinch to change depth, tap to glide, drag up or down to move to a neighbour.</p>
+  <label>Sibling strip height <b id="v-strip"></b></label>
+  <input type="range" id="p-strip" min="24" max="90" step="2">
+  <label>Detail starts at <b id="v-d0"></b></label>
+  <input type="range" id="p-d0" min="0" max="0.6" step="0.05">
+  <label>Detail complete at <b id="v-d1"></b></label>
+  <input type="range" id="p-d1" min="0.4" max="1" step="0.05">
+  <label>Travel, then unfold: split at <b id="v-split"></b></label>
+  <input type="range" id="p-split" min="0.2" max="0.8" step="0.05">
+  <label>Glide duration <b id="v-glide"></b></label>
+  <input type="range" id="p-glide" min="150" max="2400" step="50">
+  <label>Snap band on release <b id="v-snap"></b></label>
+  <input type="range" id="p-snap" min="0" max="0.5" step="0.02">
+  <label class="chk"><input type="checkbox" id="p-fast"> Run the circuit 8× faster</label>
+  <div id="hud"></div>
+</aside>
+<script src="js/study.js"></script>
+</body>
+</html>
