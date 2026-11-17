@@ -2,15 +2,15 @@
 // Persistence (IndexedDB in the browser, memory in tests). The export format is the data itself.
 
 import { addDays, dayKey, keyOfMs, parseKey } from '../model/dates.ts';
-import type { Counter, DayKey, DbData, Id, Plan, Settings, Tick } from '../model/types.ts';
+import type { Counter, DayKey, DbData, Id, Placement, Plan, Settings, Tick } from '../model/types.ts';
 import { newId } from '../util.ts';
 
-export type RecordKind = 'counter' | 'plan' | 'tick';
+export type RecordKind = 'counter' | 'plan' | 'tick' | 'placement';
 
 /** Where records are kept between sessions. Writes are fire-and-forget; load and replaceAll are awaited. */
 export interface Persistence {
   load(): Promise<DbData | null>;
-  save(kind: RecordKind, record: Counter | Plan | Tick): void;
+  save(kind: RecordKind, record: Counter | Plan | Tick | Placement): void;
   remove(kind: RecordKind, id: Id): void;
   saveSettings(settings: Settings): void;
   replaceAll(data: DbData): Promise<void>;
@@ -33,7 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
 };
 
-export const emptyData = (): DbData => ({ format: 'tempo', version: 1, counters: [], plans: [], ticks: [], settings: structuredClone(DEFAULT_SETTINGS) });
+export const emptyData = (): DbData => ({ format: 'tempo', version: 1, counters: [], plans: [], ticks: [], placements: [], settings: structuredClone(DEFAULT_SETTINGS) });
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
@@ -53,6 +53,7 @@ export function validate(raw: unknown): DbData {
   const ids = new Set(counters.map(c => c.id));
   const plans = list('plans', r => str(r.counterId) && ids.has(r.counterId) && str(r.level) && num(r.target) && str(r.clock) && str(r.from));
   const ticks = list('ticks', r => str(r.counterId) && ids.has(r.counterId) && num(r.at));
+  const placements = raw.placements === undefined ? [] : list('placements', r => str(r.counterId) && ids.has(r.counterId) && str(r.day));
   const s = raw.settings;
   if (!isObj(s) || !Array.isArray(s.parts) || !s.parts.every(p => isObj(p) && str(p.id) && str(p.name) && num(p.start))) {
     throw new Error('The export has no valid settings.');
@@ -60,6 +61,7 @@ export function validate(raw: unknown): DbData {
   return {
     format: 'tempo', version: 1,
     counters: counters as unknown as Counter[], plans: plans as unknown as Plan[], ticks: ticks as unknown as Tick[],
+    placements: placements as unknown as Placement[],
     settings: s as unknown as Settings,
   };
 }
@@ -76,6 +78,7 @@ export type Change = { days: DayKey[] } | { all: true };
 export class Db {
   counters: Counter[] = [];
   plans: Plan[] = [];
+  placements: Placement[] = [];
   settings: Settings = structuredClone(DEFAULT_SETTINGS);
   private ticks = new Map<Id, Tick>();
   private byDay = new Map<DayKey, Tick[]>();
@@ -98,7 +101,7 @@ export class Db {
 
   private adopt(data: DbData): void {
     this.counters = [...data.counters].sort((a, b) => a.order - b.order);   // storage hands records back in id order
-    this.plans = data.plans; this.settings = data.settings;
+    this.plans = data.plans; this.placements = data.placements ?? []; this.settings = data.settings;
     this.ticks.clear(); this.byDay.clear();
     data.ticks.forEach(t => this.index(t));
   }
@@ -141,6 +144,8 @@ export class Db {
     this.counters = this.counters.filter(c => c.id !== id);
     this.plans.filter(p => p.counterId === id).forEach(p => this.store.remove('plan', p.id));
     this.plans = this.plans.filter(p => p.counterId !== id);
+    this.placements.filter(p => p.counterId === id).forEach(p => this.store.remove('placement', p.id));
+    this.placements = this.placements.filter(p => p.counterId !== id);
     [...this.ticks.values()].filter(t => t.counterId === id).forEach(t => {
       this.ticks.delete(t.id); this.store.remove('tick', t.id);
       const key = keyOfMs(t.at);
@@ -148,6 +153,14 @@ export class Db {
     });
     this.store.remove('counter', id);
     this.emit({ all: true });
+  }
+  /** Pins a floating plan to a day, or unpins it if it was already there. Returns whether it is now pinned. */
+  togglePlacement(counterId: Id, day: DayKey): boolean {
+    const old = this.placements.find(p => p.counterId === counterId && p.day === day);
+    if (old) { this.placements = this.placements.filter(p => p !== old); this.store.remove('placement', old.id); }
+    else { const p: Placement = { id: newId('l'), counterId, day }; this.placements.push(p); this.store.save('placement', p); }
+    this.emit({ days: [day] });
+    return !old;
   }
   /** The plan of a counter that is still running (no end date). */
   openPlan(counterId: Id): Plan | undefined { return this.plans.find(p => p.counterId === counterId && !p.until); }
@@ -169,7 +182,8 @@ export class Db {
   /** The whole database as plain data: this is also the file a user exports. */
   export(): DbData {
     return { format: 'tempo', version: 1, exportedAt: new Date().toISOString(),
-             counters: this.counters, plans: this.plans, ticks: [...this.ticks.values()].sort((a, b) => a.at - b.at), settings: this.settings };
+             counters: this.counters, plans: this.plans, ticks: [...this.ticks.values()].sort((a, b) => a.at - b.at),
+             placements: this.placements, settings: this.settings };
   }
   /** Replaces everything with the content of an export. Validates first, so a bad file changes nothing. */
   async import(raw: unknown): Promise<void> { await this.replace(validate(raw)); }

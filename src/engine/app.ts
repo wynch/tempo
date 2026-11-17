@@ -46,7 +46,7 @@ export function start(db: Db): void {
   const models = new Map<DayKey, DayModel>();
   const modelOf = (key: DayKey): DayModel => {
     let m = models.get(key);
-    if (!m) { m = buildDay({ counters: db.counters, plans: db.plans, settings: db.settings, ticksOn: db.ticksOn, todayKey }, key); models.set(key, m); }
+    if (!m) { m = buildDay({ counters: db.counters, plans: db.plans, placements: db.placements, settings: db.settings, ticksOn: db.ticksOn, todayKey }, key); models.set(key, m); }
     return m;
   };
   // The tree holds one year: this one, or the one named in the address (#2025). Changing year reloads the page.
@@ -111,6 +111,7 @@ export function start(db: Db): void {
       const chip = el('span', 'chip' + (it.periodN >= it.target ? ' met' : ''), n.tray!);
       chip.textContent = (it.counter.short ?? it.counter.name) + ' ' + it.periodN + '/' + it.target;
       chip.style.setProperty('--c', 'var(--c-' + it.counter.color + ')');
+      chip.dataset.cid = it.counter.id; chip.dataset.span = span;      // a chip can be dragged onto a day to pin the plan there
     });
   }
   const colorOf = (filter: string): string => (filter === 'all' ? 'var(--good)' : 'var(--c-' + (db.counters.find(c => c.id === filter)?.color ?? 'slate') + ')');
@@ -221,11 +222,12 @@ export function start(db: Db): void {
       } else { p = 0; meas = m.missed ? 'skipped' : Math.round(m.seconds / 60) + ' min'; glyph = '▶'; }
     }
     // a plan that floats over a week or month is read against its whole period
-    if (m.span !== 'day' && !live(run, it)) meas = m.periodN + ' / ' + m.target + ' this ' + m.span;
+    if (m.span !== 'day' && !live(run, it)) meas = (m.placed && !m.done ? 'planned · ' : '') + m.periodN + ' / ' + m.target + ' this ' + m.span;
     if (!it.el) return;
     it.el.style.setProperty('--p', String(p));
     it.el.classList.toggle('done', m.done);
     it.el.classList.toggle('missed', m.missed && !m.done);
+    it.el.classList.toggle('floating', m.span !== 'day' && !m.placed && !m.done);
     if (it.meas!.textContent !== meas) it.meas!.textContent = meas;
     if (it.btn!.textContent !== glyph) it.btn!.textContent = glyph;
     it.num!.textContent = num;
@@ -301,6 +303,7 @@ export function start(db: Db): void {
     if (n.tray) {
       n.tray.style.opacity = (smooth(0.6, 1, s.m) * clamp(1 - s.tz * 2.5, 0, 1)).toFixed(3);
       n.tray.style.transform = 'translateY(' + px(-34 * s.tz) + ')';
+      n.tray.style.pointerEvents = s.m > 0.9 && s.tz < 0.1 ? 'auto' : 'none';
     }
     if (n.lvl === 0) {
       const lg = clamp(1 - s.tz * 2.5, 0, 1), legend = n.legend!;
@@ -531,7 +534,7 @@ export function start(db: Db): void {
     clearTimeout(wheelT); wheelT = window.setTimeout(() => { wheelT = 0; settle(); }, 170);
   }, { passive: false });
 
-  interface Gesture { mode: 'tap' | 'pinch' | 'drag' | 'year' | 'none'; x: number; y: number; t: number; target: Element | null; d0: number; z0: number; key: Key; max: number; start: number; dy: number }
+  interface Gesture { mode: 'tap' | 'pinch' | 'drag' | 'year' | 'refine' | 'none'; chip?: HTMLElement; ghost?: HTMLElement; drop?: Cell; x: number; y: number; t: number; target: Element | null; d0: number; z0: number; key: Key; max: number; start: number; dy: number }
   const ptrs = new Map<number, { x: number; y: number }>();
   let g: Gesture | null = null;
   const mid = (): { x: number; y: number; d: number } => {
@@ -543,12 +546,15 @@ export function start(db: Db): void {
     if (inSheet(e.target)) return;
     seq++;
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const chip = (e.target as Element).closest<HTMLElement>('.chip[data-cid]');
+    if (ptrs.size === 1 && chip) { g = gesture({ mode: 'refine', x: e.clientX, y: e.clientY, chip }); return; }
     if (ptrs.size === 1) g = gesture({ mode: 'tap', x: e.clientX, y: e.clientY, t: performance.now(), target: e.target as Element });
     if (ptrs.size === 2) { const c = mid(); pickFocus(c.x, c.y); g = gesture({ mode: 'pinch', d0: c.d, z0: S.z }); }
   });
   window.addEventListener('pointermove', e => {
     if (!ptrs.has(e.pointerId) || !g) return;
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (g.mode === 'refine') { refineMove(g, e.clientX, e.clientY); return; }
     if (g.mode === 'pinch' && ptrs.size >= 2) { const c = mid(); zoomTo(g.z0 + Math.log2(c.d / g.d0) * 0.95, c.x, c.y); return; }
     if (g.mode === 'tap' && Math.abs(e.clientY - g.y) > 9) {
       const Lc = Math.round(S.z);
@@ -567,6 +573,7 @@ export function start(db: Db): void {
     if (!ptrs.has(e.pointerId)) return;
     ptrs.delete(e.pointerId);
     if (!g) return;
+    if (g.mode === 'refine') { refineEnd(g, e.type === 'pointerup'); g = null; return; }
     if (g.mode === 'pinch') { if (ptrs.size < 2) { settle(); g = gesture({}); } return; }
     if (g.mode === 'year') { if (Math.abs(g.dy) > 70) gotoYear(year + (g.dy < 0 ? 1 : -1)); }
     else if (g.mode === 'drag') {
@@ -578,6 +585,28 @@ export function start(db: Db): void {
   }
   window.addEventListener('pointerup', pointerEnd);
   window.addEventListener('pointercancel', pointerEnd);
+
+  /* Refine: drag a floating plan's chip from the tray onto a day to pin it there ("gym 3× this week" → "on Thursday").
+     Dropping it on a day where it is already pinned takes the pin away. */
+  function refineMove(gs: Gesture, x: number, y: number): void {
+    const chip = gs.chip!, box = stage.getBoundingClientRect();
+    if (!gs.ghost) {
+      if (Math.hypot(x - gs.x, y - gs.y) < 6) return;          // not a drag yet
+      gs.ghost = chip.cloneNode(true) as HTMLElement;
+      gs.ghost.classList.add('ghost');
+      stage.appendChild(gs.ghost);
+      chip.classList.add('lifted');
+    }
+    gs.ghost.style.transform = 'translate(' + px(x - box.left) + ',' + px(y - box.top) + ') translate(-50%, -150%)';
+    // the day under the finger, if the plan may be pinned there: not in the past, and inside the chip's own period
+    const hit = upTo(nodeAt(document.elementFromPoint(x, y)), 3);
+    const day = hit && hit.lvl === 3 && hit.key >= todayKey && !(chip.dataset.span === 'month' && hit.out) ? hit : undefined;
+    if (day !== gs.drop) { gs.drop?.el?.classList.remove('drop'); day?.el?.classList.add('drop'); gs.drop = day; }
+  }
+  function refineEnd(gs: Gesture, dropped: boolean): void {
+    gs.ghost?.remove(); gs.chip!.classList.remove('lifted'); gs.drop?.el?.classList.remove('drop');
+    if (dropped && gs.ghost && gs.drop) db.togglePlacement(gs.chip!.dataset.cid!, gs.drop.key);
+  }
 
   // Step to the neighbouring cell. Weeks cross month ends: a straddling week has a copy in each month,
   // and the two copies look the same once opened, so we swap to the copy and carry on.

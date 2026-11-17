@@ -8,6 +8,7 @@ One surface, one gesture. Pinch or scroll to change depth (year, month, week, da
 
 - **Check, count, avoid, or play.** Tick a habit, add one to a count, log something you want less of, or run a timed circuit.
 - **Any rhythm.** Every day, some weekdays, or so many times a week or a month.
+- **Plan loosely, then refine.** "Gym three times this week" floats over the week; drag it onto a day when you know which.
 - **Readable at a glance.** The year is one strip per month; filter it by counter to see streaks and gaps.
 - **Yours.** Everything stays in your browser. Export it as one JSON file, import it elsewhere. No account, no server.
 - **Works offline** and installs to the home screen.

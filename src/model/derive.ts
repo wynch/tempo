@@ -2,7 +2,7 @@
 
 import { clamp, hhmm, spanText } from '../util.ts';
 import { addDays, dayKey, daysInMonth, minutesOfDay, mondayOf, parseKey, weekday } from './dates.ts';
-import type { Counter, DayKey, Id, Plan, Sequence, Settings, Tick } from './types.ts';
+import type { Counter, DayKey, Id, Placement, Plan, Sequence, Settings, Tick } from './types.ts';
 
 /** How an item behaves on screen. */
 export type ItemKind = 'check' | 'count' | 'avoid' | 'session';
@@ -50,6 +50,8 @@ export interface ItemModel {
   span: Span;
   /** Units logged over that whole period (equal to `n` for a day plan). */
   periodN: number;
+  /** A floating plan that has been pinned to this day: it then behaves like a plan for the day. */
+  placed: boolean;
 }
 export type Span = 'day' | 'week' | 'month';
 
@@ -77,6 +79,7 @@ export interface DayModel {
 export interface DeriveInput {
   counters: Counter[];
   plans: Plan[];
+  placements?: Placement[];
   settings: Settings;
   ticksOn: (key: DayKey) => Tick[];
   todayKey: DayKey;
@@ -135,18 +138,23 @@ export function buildDay(input: DeriveInput, key: DayKey): DayModel {
     if (!shown) return;
     const n = kind === 'count' || kind === 'avoid' ? ticks.reduce((a, t) => a + (t.amount ?? 1), 0) : ticks.length;
     const target = plan?.target ?? (kind === 'count' ? 1 : 0);
-    const floating = span !== 'day';
+    // A week or month plan floats over its period, unless it has been pinned to this day ("refined").
+    const period = span === 'day' ? [key] : periodKeys(key, span);
+    const pins = span === 'day' ? [] : (input.placements ?? []).filter(p => p.counterId === c.id && period.includes(p.day));
+    const placed = pins.some(p => p.day === key), floating = span !== 'day' && !placed;
+    // Once as many days are pinned as the plan asks for, it no longer floats over the other days.
+    if (floating && pins.length >= target && !ticks.length) return;
     // A floating plan is met on whichever days you choose: on a given day, "done" means you did it that day.
-    const done = kind === 'avoid' ? false : kind === 'count' && !floating ? n >= target : n > 0;
+    const done = kind === 'avoid' ? false : kind === 'count' && span === 'day' ? n >= target : n > 0;
     const units = (list: Tick[]): number => list.filter(t => t.counterId === c.id).reduce((a, t) => a + (kind === 'count' || kind === 'avoid' ? t.amount ?? 1 : 1), 0);
-    const periodN = floating ? periodKeys(key, span).reduce((a, k) => a + units(input.ticksOn(k)), 0) : n;
+    const periodN = span === 'day' ? n : period.reduce((a, k) => a + units(input.ticksOn(k)), 0);
     const nParts = input.settings.parts.length;
-    const partIndex = floating ? nParts + (span === 'week' ? 1 : 2) : plan?.part ? input.settings.parts.findIndex(p => p.id === plan.part) + 1 : 0;
-    const st = steps(c, kind, ticks, floating ? 0 : target, done);
+    const partIndex = floating ? nParts + (span === 'week' ? 1 : 2) : placed ? 0 : plan?.part ? input.settings.parts.findIndex(p => p.id === plan.part) + 1 : 0;
+    const st = steps(c, kind, ticks, span === 'day' ? target : 0, done);
     items.push({
       id: c.id + '@' + key, counter: c, kind, day: key, part: Math.max(0, partIndex), optional: !!c.optional,
       done, missed: !floating && past && !done && (kind === 'check' || kind === 'session'), n, target, ticks, steps: st,
-      seconds: kind === 'session' ? st.reduce((a, s) => a + (s.seconds ?? 0), 0) : 0, span, periodN,
+      seconds: kind === 'session' ? st.reduce((a, s) => a + (s.seconds ?? 0), 0) : 0, span, periodN, placed,
     });
   });
   items.sort((a, b) => a.part - b.part);
@@ -159,8 +167,8 @@ export function buildDay(input: DeriveInput, key: DayKey): DayModel {
     let sum = 0, cnt = 0;
     items.forEach(it => {
       const ceiling = Math.max(1, it.target);
-      const floating = it.span !== 'day';
-      const val = floating ? (it.n > 0 ? 1 : 0) : it.kind === 'count' ? clamp(it.n / Math.max(1, it.target), 0, 1)
+      const floating = it.span !== 'day' && !it.placed;
+      const val = it.span !== 'day' ? (it.n > 0 ? 1 : 0) : it.kind === 'count' ? clamp(it.n / Math.max(1, it.target), 0, 1)
         : it.kind === 'avoid' ? clamp(it.n / (2 * ceiling), 0, 1) : it.done ? 1 : 0;
       vals[it.counter.id] = val;
       raw[it.counter.id] = it.kind === 'count' || it.kind === 'avoid' ? it.n : it.done ? 1 : 0;

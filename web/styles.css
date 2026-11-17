@@ -170,3 +170,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .crow{display:grid;grid-template-columns:auto 1fr;column-gap:12px;align-items:center;text-align:left;padding:10px 12px;border-radius:12px;background:var(--card)}
 .crow i{grid-row:span 2;width:18px;height:18px;border-radius:5px;background:var(--c)}
 .crow small{color:var(--mute);font-size:13px}
+
+/* refine: a chip lifted from the tray and carried to a day */
+.tray .chip{cursor:grab;touch-action:none}
+.chip.lifted{opacity:.35}
+.chip.ghost{position:absolute;left:0;top:0;z-index:10;pointer-events:none;background:var(--paper);border-style:solid;
+  box-shadow:0 6px 20px rgba(0,0,0,.25);cursor:grabbing}
+.node.drop{outline:2px solid var(--now);outline-offset:-2px;border-radius:6px}
+/* a plan still floating over its week or month is drawn lighter than one pinned to the day */
+.item.floating .mark{border-style:dotted;opacity:.55}

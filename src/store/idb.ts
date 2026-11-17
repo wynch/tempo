@@ -1,10 +1,10 @@
 // Persistence in the browser's IndexedDB: one object store per record kind, plus one for settings.
 
-import type { Counter, DbData, Id, Plan, Settings, Tick } from '../model/types.ts';
+import type { Counter, DbData, Id, Placement, Plan, Settings, Tick } from '../model/types.ts';
 import { DEFAULT_SETTINGS, type Persistence, type RecordKind } from './db.ts';
 
-const NAME = 'tempo', VERSION = 1;
-const STORES: Record<RecordKind, string> = { counter: 'counters', plan: 'plans', tick: 'ticks' };
+const NAME = 'tempo', VERSION = 2;      // 2 added the placements store; the upgrade below only creates what is missing
+const STORES: Record<RecordKind, string> = { counter: 'counters', plan: 'plans', tick: 'ticks', placement: 'placements' };
 
 const done = <T>(req: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => { req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
@@ -27,14 +27,15 @@ export class IdbPersistence implements Persistence {
 
   async load(): Promise<DbData | null> {
     const tx = this.db.transaction([...Object.values(STORES), 'meta'], 'readonly');
-    const [counters, plans, ticks, settings] = await Promise.all([
+    const [counters, plans, ticks, placements, settings] = await Promise.all([
       done(tx.objectStore('counters').getAll() as IDBRequest<Counter[]>),
       done(tx.objectStore('plans').getAll() as IDBRequest<Plan[]>),
       done(tx.objectStore('ticks').getAll() as IDBRequest<Tick[]>),
+      done(tx.objectStore('placements').getAll() as IDBRequest<Placement[]>),
       done(tx.objectStore('meta').get('settings') as IDBRequest<Settings | undefined>),
     ]);
     if (!counters.length && !ticks.length && !settings) return null;   // nothing was ever stored
-    return { format: 'tempo', version: 1, counters, plans, ticks, settings: settings ?? structuredClone(DEFAULT_SETTINGS) };
+    return { format: 'tempo', version: 1, counters, plans, ticks, placements, settings: settings ?? structuredClone(DEFAULT_SETTINGS) };
   }
 
   private write(store: string, fn: (s: IDBObjectStore) => void): void {
@@ -42,7 +43,7 @@ export class IdbPersistence implements Persistence {
     fn(tx.objectStore(store));
     tx.onerror = () => console.error('Tempo: could not save to ' + store, tx.error);
   }
-  save(kind: RecordKind, record: Counter | Plan | Tick): void { this.write(STORES[kind], s => s.put(record)); }
+  save(kind: RecordKind, record: Counter | Plan | Tick | Placement): void { this.write(STORES[kind], s => s.put(record)); }
   remove(kind: RecordKind, id: Id): void { this.write(STORES[kind], s => s.delete(id)); }
   saveSettings(settings: Settings): void { this.write('meta', s => s.put(settings, 'settings')); }
 
@@ -52,7 +53,7 @@ export class IdbPersistence implements Persistence {
       const s = tx.objectStore(name);
       s.clear(); records.forEach(r => s.put(r));
     };
-    fill('counters', data.counters); fill('plans', data.plans); fill('ticks', data.ticks);
+    fill('counters', data.counters); fill('plans', data.plans); fill('ticks', data.ticks); fill('placements', data.placements ?? []);
     tx.objectStore('meta').put(data.settings, 'settings');
     await finished(tx);
   }

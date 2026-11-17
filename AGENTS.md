@@ -18,7 +18,7 @@ Node 24 runs the tests straight from `.ts` files, so imports carry the `.ts` ext
 
 | Path | Holds |
 |---|---|
-| `src/model/types.ts` | The records: Counter, Plan, Sequence, Tick, Settings, and DbData (also the export format) |
+| `src/model/types.ts` | The records: Counter, Plan, Sequence, Tick, Placement, Settings, and DbData (also the export format) |
 | `src/model/dates.ts` | Local-date arithmetic, Monday weeks, ISO week numbers |
 | `src/model/derive.ts` | Pure: records → what a day shows (`buildDay`), month totals, colour steps |
 | `src/store/db.ts` | `Db`: all records in memory, changes written through a `Persistence`; `validate`, export, import |
@@ -61,16 +61,18 @@ Node 24 runs the tests straight from `.ts` files, so imports carry the `.ts` ext
 
 ## State of things
 
-Done: model, store, export/import; the engine on real dates; ticking (check, +1, removing a logged row by tapping it); the session player writing to the log; creating, editing and deleting counters, rhythms and circuits; week and month plans with their tray; other years; reduced motion; offline install; deploy.
+Done: model, store, export/import; the engine on real dates; ticking (check, +1, removing a logged row by tapping it); the session player writing to the log; creating, editing and deleting counters, rhythms and circuits; week and month plans with their tray and the refine drag; other years; reduced motion; offline install; deploy.
 
 How some of it works:
 - Changing a rhythm ends the old plan yesterday and starts a new one today (`Db.setPlan`), so past days keep the plan they had.
 - A week or month plan floats: its item sits in every day of the period under "This week" / "This month", is counted over the whole period (`periodN`), and never shows as missed. A tick therefore refreshes every day of its period.
+- Refine: dragging a chip from a week's or month's tray onto a day pins the floating plan there (a `Placement`; `Db.togglePlacement`). A pinned item sits with the day's own items, can be missed, and counts in the day's score. Dropping the chip on a pinned day unpins it. Once as many days are pinned as the plan asks for, the plan no longer floats over the other days of the period. Past days refuse the drop. The drag is the `refine` gesture in `app.ts`.
+- IndexedDB is at version 2 (the `placements` store). An export without `placements` still loads.
 - The tree holds one year. Another year is named in the address (`#2025`) and changing year reloads the page.
 - A structural change (counter, plan, import) rebuilds every day from the records (`refreshAll`); a tick rebuilds only its days (`refreshDays`).
 - The service worker is network-first, so a deploy shows at once and the cache only answers offline.
 
-Not done: dragging a floating plan from the tray onto a day ("refine"); part of day as a zoom stop, and editing the parts of day; elastic plans (due some days after the last tick) are in the model but not offered; reordering counters; archiving instead of deleting; reminders (no push server, so nothing can fire while the app is closed). Touch pinch is written but untested on a real phone.
+Not done: holding a dragged chip over a row to spring it open and drop one level deeper; part of day as a zoom stop, and editing the parts of day; elastic plans (due some days after the last tick) are in the model but not offered; reordering counters; archiving instead of deleting; reminders (no push server, so nothing can fire while the app is closed). Touch pinch is written but untested on a real phone.
 
 ## Rules
 

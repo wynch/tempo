@@ -72,6 +72,13 @@ export interface Tick {
   seconds?: number;
 }
 
+/** A floating plan pinned to one day of its period: "gym 3× this week" refined to "on Tuesday". */
+export interface Placement {
+  id: Id;
+  counterId: Id;
+  day: DayKey;
+}
+
 export interface Part {
   id: Id;
   name: string;
@@ -90,5 +97,7 @@ export interface DbData {
   counters: Counter[];
   plans: Plan[];
   ticks: Tick[];
+  /** Absent in exports made before placements existed. */
+  placements?: Placement[];
   settings: Settings;
 }

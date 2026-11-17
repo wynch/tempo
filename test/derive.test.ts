@@ -90,3 +90,26 @@ test('a plan that floats over a week is counted over the whole week, and can be 
   assert.deepEqual(periodKeys('2026-11-10', 'week').slice(0, 2), ['2026-11-09', '2026-11-10']);
   assert.equal(periodKeys('2026-02-10', 'month').length, 28);
 });
+
+test('refine: pinning a floating plan to a day makes it that day\'s task', () => {
+  const plans = data.plans.map(p => (p.counterId === 'stretch' ? { ...p, level: 'week' as const, target: 2, part: undefined } : p));
+  const noStretch = data.ticks.filter(t => t.counterId !== 'stretch');
+  const inp = (days: string[]) => ({ ...input(), plans, ticksOn: (k: string) => noStretch.filter(t => keyOfMs(t.at) === k),
+                                     placements: days.map((day, i) => ({ id: 'l' + i, counterId: 'stretch', day })) });
+  const at = (key: string, days: string[]) => buildDay(inp(days), key).items.find(it => it.counter.id === 'stretch');
+
+  assert.equal(at('2026-11-19', [])!.placed, false);
+  assert.equal(at('2026-11-19', [])!.part, 4, 'floating: under "This week"');
+
+  const pinned = at('2026-11-19', ['2026-11-19'])!;
+  assert.equal(pinned.placed, true);
+  assert.equal(pinned.part, 0, 'pinned: with the day\'s own items');
+  assert.equal(at('2026-11-20', ['2026-11-19'])!.placed, false, 'one pin of two: it still floats over the other days');
+
+  assert.equal(at('2026-11-21', ['2026-11-19', '2026-11-20']), undefined, 'both pinned: it no longer floats elsewhere');
+  assert.ok(at('2026-11-20', ['2026-11-19', '2026-11-20']));
+  assert.equal(at('2026-11-24', ['2026-11-19', '2026-11-20'])!.placed, false, 'the next week is untouched');
+
+  assert.equal(at('2026-11-16', ['2026-11-16'])!.missed, true, 'a pinned day that passed undone counts as missed');
+  assert.equal(at('2026-11-17', ['2026-11-16'])!.missed, false, 'a floating one never does');
+});

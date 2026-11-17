@@ -86,3 +86,24 @@ test('an emptied database stays empty when reopened', async () => {
   const b = await Db.open(store, () => { throw new Error('must not seed again'); });
   assert.equal(b.counters.length, 0);
 });
+
+test('placements toggle, travel with an export, and go with their counter', async () => {
+  const db = await open(), seen: Change[] = [];
+  db.onChange(c => seen.push(c));
+  assert.equal(db.togglePlacement('gym', '2026-11-19'), true);
+  assert.equal(db.togglePlacement('gym', '2026-11-21'), true);
+  assert.equal(db.togglePlacement('gym', '2026-11-19'), false, 'a second drop on the same day unpins it');
+  assert.deepEqual(db.placements.map(p => p.day), ['2026-11-21']);
+  assert.deepEqual(seen.at(-1), { days: ['2026-11-19'] });
+
+  const copy = await Db.open(new MemoryPersistence());
+  await copy.import(JSON.parse(JSON.stringify(db.export())));
+  assert.deepEqual(copy.placements.map(p => p.day), ['2026-11-21']);
+
+  const old = JSON.parse(JSON.stringify(db.export())) as { placements?: unknown };
+  delete old.placements;
+  assert.deepEqual(validate(old).placements, [], 'an export from before placements still loads');
+
+  db.deleteCounter('gym');
+  assert.equal(db.placements.length, 0);
+});
