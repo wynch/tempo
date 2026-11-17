@@ -33,7 +33,7 @@ export class IdbPersistence implements Persistence {
       done(tx.objectStore('ticks').getAll() as IDBRequest<Tick[]>),
       done(tx.objectStore('meta').get('settings') as IDBRequest<Settings | undefined>),
     ]);
-    if (!counters.length && !ticks.length) return null;
+    if (!counters.length && !ticks.length && !settings) return null;   // nothing was ever stored
     return { format: 'tempo', version: 1, counters, plans, ticks, settings: settings ?? structuredClone(DEFAULT_SETTINGS) };
   }
 

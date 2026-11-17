@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDay, flatten, monthSummary, partAt, step5, type DeriveInput } from '../src/model/derive.ts';
+import { buildDay, flatten, monthSummary, partAt, periodKeys, step5, type DeriveInput } from '../src/model/derive.ts';
 import { atMinute, keyOfMs } from '../src/model/dates.ts';
 import type { DbData, Tick } from '../src/model/types.ts';
 import { seed } from '../src/store/seed.ts';
@@ -74,4 +74,19 @@ test('small helpers', () => {
   assert.equal(flatten(data.counters.find(c => c.id === 'gym')!.sequence!).length, 13);
   assert.deepEqual([null, 0, 0.1, 0.3, 0.6, 0.9].map(step5), [0, 0, 0.22, 0.45, 0.7, 1]);
   assert.deepEqual([0, 6 * 60, 13 * 60, 20 * 60].map(m => partAt(data.settings, m)), [0, 1, 2, 3]);
+});
+
+test('a plan that floats over a week is counted over the whole week, and can be met on any day', () => {
+  const plans = data.plans.map(p => (p.counterId === 'gym' ? { ...p, level: 'week' as const, target: 3, weekdays: undefined, part: undefined } : p));
+  const inp = { ...input(), plans };
+  const tue = buildDay(inp, '2026-11-10'), gym = tue.items.find(it => it.counter.id === 'gym')!;
+  assert.equal(gym.span, 'week');
+  assert.equal(gym.part, 4, 'the "This week" group, after the parts of day');
+  assert.equal(tue.parts.at(-1)!.name, 'This week');
+  assert.equal(gym.missed, false);
+  const week = ['09', '10', '11', '12', '13', '14', '15'].map(d => buildDay(inp, '2026-11-' + d).items.find(it => it.counter.id === 'gym')!);
+  assert.equal(gym.periodN, week.reduce((a, it) => a + it.n, 0));
+  assert.ok(week.every(it => it.periodN === gym.periodN), 'every day of the week reads the same total');
+  assert.deepEqual(periodKeys('2026-11-10', 'week').slice(0, 2), ['2026-11-09', '2026-11-10']);
+  assert.equal(periodKeys('2026-02-10', 'month').length, 28);
 });

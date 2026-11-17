@@ -1,7 +1,7 @@
 // The database as the app sees it: all records in memory, every change written through to a
 // Persistence (IndexedDB in the browser, memory in tests). The export format is the data itself.
 
-import { keyOfMs } from '../model/dates.ts';
+import { addDays, dayKey, keyOfMs, parseKey } from '../model/dates.ts';
 import type { Counter, DayKey, DbData, Id, Plan, Settings, Tick } from '../model/types.ts';
 import { newId } from '../util.ts';
 
@@ -64,6 +64,12 @@ export function validate(raw: unknown): DbData {
   };
 }
 
+/** A rhythm as the editor describes it: a plan without its identity and dates. */
+export type PlanSpec = Omit<Plan, 'id' | 'counterId' | 'from' | 'until'>;
+const samePlan = (p: Plan, s: PlanSpec): boolean =>
+  p.level === s.level && p.target === s.target && p.clock === s.clock && (p.part ?? '') === (s.part ?? '') &&
+  (p.weekdays ?? []).join() === (s.weekdays ?? []).join();
+
 /** What a change touched, so views repaint only that. */
 export type Change = { days: DayKey[] } | { all: true };
 
@@ -82,7 +88,7 @@ export class Db {
   static async open(store: Persistence, seed?: () => DbData): Promise<Db> {
     const db = new Db(store);
     let data = await store.load();
-    if (!data || !data.counters.length) {
+    if (!data) {                      // nothing stored at all: a first run
       data = seed ? seed() : emptyData();
       await store.replaceAll(data);
     }
@@ -120,6 +126,44 @@ export class Db {
     this.byDay.set(key, this.ticksOn(key).filter(x => x.id !== id));
     this.store.remove('tick', id);
     this.emit({ days: [key] });
+  }
+
+  /** Adds a counter, or replaces the one with the same id. */
+  saveCounter(c: Counter): void {
+    const i = this.counters.findIndex(x => x.id === c.id);
+    if (i >= 0) this.counters[i] = c; else this.counters.push(c);
+    this.counters.sort((a, b) => a.order - b.order);
+    this.store.save('counter', c);
+    this.emit({ all: true });
+  }
+  /** Removes a counter with its plans and everything logged against it. */
+  deleteCounter(id: Id): void {
+    this.counters = this.counters.filter(c => c.id !== id);
+    this.plans.filter(p => p.counterId === id).forEach(p => this.store.remove('plan', p.id));
+    this.plans = this.plans.filter(p => p.counterId !== id);
+    [...this.ticks.values()].filter(t => t.counterId === id).forEach(t => {
+      this.ticks.delete(t.id); this.store.remove('tick', t.id);
+      const key = keyOfMs(t.at);
+      this.byDay.set(key, this.ticksOn(key).filter(x => x.id !== t.id));
+    });
+    this.store.remove('counter', id);
+    this.emit({ all: true });
+  }
+  /** The plan of a counter that is still running (no end date). */
+  openPlan(counterId: Id): Plan | undefined { return this.plans.find(p => p.counterId === counterId && !p.until); }
+  /** Changes a counter's rhythm from `today` on. The past keeps the plan it had, so history is not rewritten. */
+  setPlan(counterId: Id, spec: PlanSpec | null, today: DayKey): void {
+    const old = this.openPlan(counterId);
+    if (old && spec && samePlan(old, spec)) return;
+    if (old) {
+      if (old.from >= today) { this.plans = this.plans.filter(p => p !== old); this.store.remove('plan', old.id); }
+      else { old.until = dayKey(addDays(parseKey(today), -1)); this.store.save('plan', old); }
+    }
+    if (spec) {
+      const p: Plan = { id: newId('p'), counterId, from: today, ...spec };
+      this.plans.push(p); this.store.save('plan', p);
+    }
+    this.emit({ all: true });
   }
 
   /** The whole database as plain data: this is also the file a user exports. */

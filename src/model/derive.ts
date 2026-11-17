@@ -1,7 +1,7 @@
 // From records to what a day shows. Pure: same inputs, same output, no clock and no DOM.
 
 import { clamp, hhmm, spanText } from '../util.ts';
-import { minutesOfDay, parseKey, weekday } from './dates.ts';
+import { addDays, dayKey, daysInMonth, minutesOfDay, mondayOf, parseKey, weekday } from './dates.ts';
 import type { Counter, DayKey, Id, Plan, Sequence, Settings, Tick } from './types.ts';
 
 /** How an item behaves on screen. */
@@ -46,6 +46,19 @@ export interface ItemModel {
   steps: StepModel[];
   /** Planned length of a session, in seconds. */
   seconds: number;
+  /** The cell the plan counts over. A week or month plan floats: it can be met on any day of its period. */
+  span: Span;
+  /** Units logged over that whole period (equal to `n` for a day plan). */
+  periodN: number;
+}
+export type Span = 'day' | 'week' | 'month';
+
+/** The days of the week or month a day belongs to. */
+export function periodKeys(key: DayKey, span: Span): DayKey[] {
+  const d = parseKey(key);
+  if (span === 'week') { const m = mondayOf(d); return Array.from({ length: 7 }, (_, i) => dayKey(addDays(m, i))); }
+  if (span === 'month') return Array.from({ length: daysInMonth(d.getFullYear(), d.getMonth()) }, (_, i) => dayKey(new Date(d.getFullYear(), d.getMonth(), i + 1)));
+  return [key];
 }
 
 export interface DayModel {
@@ -69,11 +82,11 @@ export interface DeriveInput {
   todayKey: DayKey;
 }
 
-/** The day-level plan of a counter that is in force on a given day, if any. */
-export function dayPlan(plans: Plan[], counterId: Id, key: DayKey, wd: number): Plan | undefined {
+/** The plan of a counter that is in force on a given day, if any. A day plan may skip some weekdays. */
+export function planOn(plans: Plan[], counterId: Id, key: DayKey, wd: number): Plan | undefined {
   return plans.find(p =>
-    p.counterId === counterId && p.level === 'day' && p.from <= key && (!p.until || key <= p.until) &&
-    (!p.weekdays || p.weekdays.includes(wd)));
+    p.counterId === counterId && p.from <= key && (!p.until || key <= p.until) &&
+    (p.level !== 'day' || !p.weekdays || p.weekdays.includes(wd)));
 }
 
 /** A circuit written out step by step. */
@@ -115,25 +128,30 @@ export function buildDay(input: DeriveInput, key: DayKey): DayModel {
   [...input.counters].sort((a, b) => a.order - b.order).forEach(c => {
     if (c.archivedAt != null) return;
     const kind = itemKind(c);
-    const plan = dayPlan(input.plans, c.id, key, wd);
+    const plan = planOn(input.plans, c.id, key, wd), span: Span = plan?.level ?? 'day';
     const ticks = dayTicks.filter(t => t.counterId === c.id).sort((a, b) => a.at - b.at);
     // An avoid counter is something you log when it happens: it has no place on a future day.
     const shown = ticks.length > 0 || (!!plan && !(kind === 'avoid' && future)) || (kind === 'avoid' && today);
     if (!shown) return;
     const n = kind === 'count' || kind === 'avoid' ? ticks.reduce((a, t) => a + (t.amount ?? 1), 0) : ticks.length;
     const target = plan?.target ?? (kind === 'count' ? 1 : 0);
-    const done = kind === 'avoid' ? false : kind === 'count' ? n >= target : n > 0;
-    const partIndex = plan?.part ? input.settings.parts.findIndex(p => p.id === plan.part) + 1 : 0;
-    const st = steps(c, kind, ticks, target, done);
+    const floating = span !== 'day';
+    // A floating plan is met on whichever days you choose: on a given day, "done" means you did it that day.
+    const done = kind === 'avoid' ? false : kind === 'count' && !floating ? n >= target : n > 0;
+    const units = (list: Tick[]): number => list.filter(t => t.counterId === c.id).reduce((a, t) => a + (kind === 'count' || kind === 'avoid' ? t.amount ?? 1 : 1), 0);
+    const periodN = floating ? periodKeys(key, span).reduce((a, k) => a + units(input.ticksOn(k)), 0) : n;
+    const nParts = input.settings.parts.length;
+    const partIndex = floating ? nParts + (span === 'week' ? 1 : 2) : plan?.part ? input.settings.parts.findIndex(p => p.id === plan.part) + 1 : 0;
+    const st = steps(c, kind, ticks, floating ? 0 : target, done);
     items.push({
       id: c.id + '@' + key, counter: c, kind, day: key, part: Math.max(0, partIndex), optional: !!c.optional,
-      done, missed: past && !done && (kind === 'check' || kind === 'session'), n, target, ticks, steps: st,
-      seconds: kind === 'session' ? st.reduce((a, s) => a + (s.seconds ?? 0), 0) : 0,
+      done, missed: !floating && past && !done && (kind === 'check' || kind === 'session'), n, target, ticks, steps: st,
+      seconds: kind === 'session' ? st.reduce((a, s) => a + (s.seconds ?? 0), 0) : 0, span, periodN,
     });
   });
   items.sort((a, b) => a.part - b.part);
 
-  const names = ['All day', ...input.settings.parts.map(p => p.name)];
+  const names = ['All day', ...input.settings.parts.map(p => p.name), 'This week', 'This month'];
   const parts = names.map((name, pi) => ({ pi, name })).filter(p => items.some(it => it.part === p.pi));
 
   const vals: Record<string, number | null> = { all: 0 }, raw: Record<string, number> = {};
@@ -141,11 +159,12 @@ export function buildDay(input: DeriveInput, key: DayKey): DayModel {
     let sum = 0, cnt = 0;
     items.forEach(it => {
       const ceiling = Math.max(1, it.target);
-      const val = it.kind === 'count' ? clamp(it.n / Math.max(1, it.target), 0, 1)
+      const floating = it.span !== 'day';
+      const val = floating ? (it.n > 0 ? 1 : 0) : it.kind === 'count' ? clamp(it.n / Math.max(1, it.target), 0, 1)
         : it.kind === 'avoid' ? clamp(it.n / (2 * ceiling), 0, 1) : it.done ? 1 : 0;
       vals[it.counter.id] = val;
       raw[it.counter.id] = it.kind === 'count' || it.kind === 'avoid' ? it.n : it.done ? 1 : 0;
-      if (it.optional) return;
+      if (it.optional || floating) return;        // a floating plan is judged over its period, not day by day
       cnt++;
       // For something to avoid, a good day is one at or under the ceiling.
       sum += it.kind === 'avoid' ? (it.n <= it.target ? 1 : clamp(1 - (it.n - it.target) / ceiling, 0, 1)) : val;
@@ -165,6 +184,7 @@ export function monthSummary(days: DayModel[], filter: string, counters: Counter
   if (!c || !on.length) return '';
   const total = on.reduce((a, d) => a + (d.raw[filter] ?? 0), 0);
   const kind = itemKind(c);
+  if (on.some(d => d.items.some(it => it.counter.id === filter && it.span !== 'day'))) return String(total);
   return kind === 'avoid' ? String(total) : kind === 'count' ? (total / on.length).toFixed(1) : total + '/' + on.length;
 }
 

@@ -2,10 +2,12 @@
 // layout() decides where everything is; this file writes it to the page and turns gestures into state.
 
 import { atMinute, dayOfYear, daysInMonth, daysInYear, keyOfMs, minutesOfDay, MONTHS, parseKey } from '../model/dates.ts';
-import { buildDay, monthSummary, partAt, step5, type DayModel } from '../model/derive.ts';
+import { buildDay, monthSummary, partAt, periodKeys, step5, type DayModel } from '../model/derive.ts';
 import type { DayKey } from '../model/types.ts';
 import type { Db } from '../store/db.ts';
+import { emptyData } from '../store/db.ts';
 import { seed } from '../store/seed.ts';
+import { closeSheet, openCounters, openEditor, sheetOpen, type EditorHost } from '../ui/editor.ts';
 import { clamp, ease, hhmm, lerp, mmss, smooth, spanText } from '../util.ts';
 import { HEAD, layout, P, stepId, type Box, type Layout } from './layout.ts';
 import { buildYear, syncItems, type AnyNode, type Cell, type ItemNode, type KidView } from './tree.ts';
@@ -47,16 +49,25 @@ export function start(db: Db): void {
     if (!m) { m = buildDay({ counters: db.counters, plans: db.plans, settings: db.settings, ticksOn: db.ticksOn, todayKey }, key); models.set(key, m); }
     return m;
   };
-  const tree = buildYear(todayDate.getFullYear(), todayKey, modelOf);
-  const root = tree.root, today = tree.today, todayWeek = today.parent!, todayMonth = todayWeek.parent!;
+  // The tree holds one year: this one, or the one named in the address (#2025). Changing year reloads the page.
+  const year = Number(location.hash.slice(1)) || todayDate.getFullYear();
+  const tree = buildYear(year, todayKey, modelOf);
+  const root = tree.root, today = tree.today, todayWeek = today?.parent ?? undefined, todayMonth = todayWeek?.parent ?? undefined;
+  const host: EditorHost = { db, todayKey, sheet: byIdEl('sheet') };
+  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;   // then depth changes are cuts, not glides
+  function gotoYear(y: number): void {
+    if (y === todayDate.getFullYear()) history.replaceState(null, '', location.pathname + location.search); else location.hash = String(y);
+    location.reload();
+  }
 
   /* ---- state: depth, the focused child at each level (month, week, day, item), the filter ---- */
-  const S = { filter: 'all', z: 3, f0: todayMonth.k, f1: todayWeek.k, f2: today.k, f3: 0, rb: 0 };
+  const S = today ? { filter: 'all', z: 3, f0: todayMonth!.k, f1: todayWeek!.k, f2: today.k, f3: 0, rb: 0 }
+    : { filter: 'all', z: 0, f0: 0, f1: 0, f2: 0, f3: 0, rb: 0 };
   let W = 0, H = 0, dirty = true, L: Layout = {};
   const tweens: Partial<Record<Key, { from: number; to: number; t0: number; ms: number }>> = {};
   function glide(key: Key, to: number, ms?: number): void {
     if (Math.abs(S[key] - to) < 1e-4) { delete tweens[key]; return; }
-    tweens[key] = { from: S[key], to, t0: performance.now(), ms: ms ?? P.glide };
+    tweens[key] = { from: S[key], to, t0: performance.now(), ms: calm ? 1 : ms ?? P.glide };
   }
   function setDirect(key: Key, v: number): void { delete tweens[key]; S[key] = v; dirty = true; }
   function focusCell(l: number): Cell {
@@ -78,7 +89,30 @@ export function start(db: Db): void {
   const stepP = (it: ItemNode, j: number): number => runOf(it)?.p[j] ?? it.model.steps[j]!.p;
 
   /* ---- DOM, built lazily: a node gets its element the first time it is on screen ---- */
-  const filters: [string, string, string][] = [['all', 'All', 'var(--ink)'], ...db.counters.map((c): [string, string, string] => [c.id, c.short ?? c.name, 'var(--c-' + c.color + ')'])];
+  const filters = (): [string, string, string][] => [['all', 'All', 'var(--ink)'], ...db.counters.map((c): [string, string, string] => [c.id, c.short ?? c.name, 'var(--c-' + c.color + ')'])];
+  function fillLegend(): void {
+    const legend = root.legend; if (!legend) return;
+    legend.replaceChildren();
+    filters().forEach(([k, name, color]) => {
+      const b = el('button', k === S.filter ? 'on' : '', legend);
+      b.textContent = name; b.dataset.act = 'filter'; b.dataset.key = k; b.style.setProperty('--c', color);
+    });
+  }
+  /** The tray of a week or a month: the plans that float over it, with how far along they are. */
+  function fillTray(n: Cell): void {
+    if (!n.tray) return;
+    const span = n.lvl === 2 ? 'week' : 'month';
+    // a plan may start part-way through the period, so look at every day and keep the latest reading of each counter
+    const days = n.lvl === 2 ? n.kids : n.kids.flatMap(w => w.kids.filter(d => !d.out));
+    const latest = new Map<string, DayModel['items'][number]>();
+    days.forEach(d => d.model!.items.forEach(it => { if (it.span === span) latest.set(it.counter.id, it); }));
+    n.tray.replaceChildren();
+    latest.forEach(it => {
+      const chip = el('span', 'chip' + (it.periodN >= it.target ? ' met' : ''), n.tray!);
+      chip.textContent = (it.counter.short ?? it.counter.name) + ' ' + it.periodN + '/' + it.target;
+      chip.style.setProperty('--c', 'var(--c-' + it.counter.color + ')');
+    });
+  }
   const colorOf = (filter: string): string => (filter === 'all' ? 'var(--good)' : 'var(--c-' + (db.counters.find(c => c.id === filter)?.color ?? 'slate') + ')');
 
   function monthText(m: Cell): string {
@@ -111,13 +145,8 @@ export function start(db: Db): void {
     n.lab = el('div', 'lab', n.el, n.label);
     n.body = el('div', 'nbody', n.el);
     if (n.lvl === 1) n.sum = el('div', 'sum', n.el, monthText(n));
-    if (n.lvl === 0) {               // the year's title bar carries the counter filter
-      n.legend = el('div', 'legend', n.el);
-      filters.forEach(([k, name, color]) => {
-        const b = el('button', k === S.filter ? 'on' : '', n.legend!, name);
-        b.dataset.act = 'filter'; b.dataset.key = k; b.style.setProperty('--c', color);
-      });
-    }
+    if (n.lvl === 0) { n.legend = el('div', 'legend', n.el); fillLegend(); }   // the year's title bar carries the counter filter
+    if (n.lvl === 1 || n.lvl === 2) { n.tray = el('div', 'tray', n.el); fillTray(n); }
     n.el.dataset.id = n.id;
     if (n.lvl === 3) paintDay(n);
   }
@@ -130,6 +159,7 @@ export function start(db: Db): void {
     it.mark = el('div', 'mark', it.el, '<i></i>');
     it.num = el('b', '', it.mark);
     el('div', 'name', it.el).textContent = c.name;
+    el('i', 'pen', it.el.lastElementChild!, '✎');     // shown once the item is open: tap the name to edit the counter
     it.meas = el('div', 'meas', it.el);
     it.btn = el('button', 'btn' + (it.model.kind === 'check' ? ' fillable' : ''), it.el);
     it.body = el('div', 'item-body', it.el);
@@ -171,6 +201,7 @@ export function start(db: Db): void {
       meas = m.done ? hhmm(minutesOfDay(m.ticks[0]!.at)) : m.missed ? 'skipped' : m.optional ? 'optional' : '';
     } else if (m.kind === 'count') {
       p = clamp(m.n / Math.max(1, m.target), 0, 1); meas = m.n + ' / ' + m.target; glyph = '+1';
+      if (m.span !== 'day') p = m.n > 0 ? 1 : 0;
     } else if (m.kind === 'avoid') {
       const last = m.ticks[m.ticks.length - 1];
       p = m.n ? 1 : 0; num = m.n ? String(m.n) : ''; glyph = '+1';
@@ -189,6 +220,8 @@ export function start(db: Db): void {
         p = 1; meas = 'Done · ' + Math.round(took / 60) + ' min'; glyph = '↺';
       } else { p = 0; meas = m.missed ? 'skipped' : Math.round(m.seconds / 60) + ' min'; glyph = '▶'; }
     }
+    // a plan that floats over a week or month is read against its whole period
+    if (m.span !== 'day' && !live(run, it)) meas = m.periodN + ' / ' + m.target + ' this ' + m.span;
     if (!it.el) return;
     it.el.style.setProperty('--p', String(p));
     it.el.classList.toggle('done', m.done);
@@ -200,7 +233,12 @@ export function start(db: Db): void {
   }
 
   /** A change in the log: rebuild those days, and repaint every place they show. */
-  function refreshDays(keys: DayKey[]): void {
+  function refreshDays(days: DayKey[]): void {
+    // a tick also moves the count of any plan that floats over its week or month
+    const keys = new Set(days);
+    (['week', 'month'] as const).forEach(span => {
+      if (db.plans.some(p => p.level === span)) days.forEach(k => periodKeys(k, span).forEach(x => keys.add(x)));
+    });
     keys.forEach(key => {
       models.delete(key);
       const model = modelOf(key);
@@ -212,11 +250,27 @@ export function start(db: Db): void {
         clearSigs(d);
         const m = d.out ? null : d.parent!.parent!;
         if (m?.sum) m.sum.textContent = monthText(m);
+        fillTray(d.parent!); if (m) fillTray(m);
       });
     });
     dirty = true;
   }
-  db.onChange(c => { if ('all' in c) location.reload(); else refreshDays(c.days); });
+  /** Counters or plans changed, or the whole database was replaced: rebuild every day from the records. */
+  function refreshAll(): void {
+    models.clear(); runs.clear(); running = null;
+    if (!db.counters.some(c => c.id === S.filter)) S.filter = 'all';
+    fillLegend();
+    [...tree.daysByKey.values()].flat().forEach(d => {
+      d.items.forEach(it => { it.el?.remove(); it.el = undefined; it.kids = []; it.shown = undefined; });   // name, colour or kind may have changed
+      d.model = modelOf(d.key);
+      syncItems(d, tree.byId);
+      paintDay(d);
+    });
+    tree.byId.forEach(n => { if (n.lvl === 4) return; n.sig = ''; if (n.sum) n.sum.textContent = monthText(n); fillTray(n); });
+    setDirect('f3', clamp(S.f3, 0, Math.max(0, focusCell(3).items.length - 1)));
+    dirty = true;
+  }
+  db.onChange(c => { if ('all' in c) refreshAll(); else refreshDays(c.days); });
 
   /* ---- apply: write the layout to the page ---- */
   const vis = (n: Cell, on: boolean): void => { if (!!n.off === on) { n.el!.style.display = on ? '' : 'none'; n.off = !on; } };
@@ -243,6 +297,10 @@ export function start(db: Db): void {
       const so = s.r * clamp(1 - s.m * 4, 0, 1) * smooth(20, 30, s.h);
       n.sum!.style.opacity = so.toFixed(3);
       if (so > 0.01) n.sum!.style.transform = 'translateY(' + px((s.h - 16) / 2) + ')';
+    }
+    if (n.tray) {
+      n.tray.style.opacity = (smooth(0.6, 1, s.m) * clamp(1 - s.tz * 2.5, 0, 1)).toFixed(3);
+      n.tray.style.transform = 'translateY(' + px(-34 * s.tz) + ')';
     }
     if (n.lvl === 0) {
       const lg = clamp(1 - s.tz * 2.5, 0, 1), legend = n.legend!;
@@ -273,7 +331,7 @@ export function start(db: Db): void {
       place(e, q.x, q.y, q.w, q.h);
       st.setProperty('--r', q.r.toFixed(3)); st.setProperty('--m', q.m.toFixed(3)); st.setProperty('--co', q.co.toFixed(3));
       st.setProperty('--s', px(q.s)); st.setProperty('--sn', q.s.toFixed(1)); st.setProperty('--mx', px(q.mx)); st.setProperty('--my', px(q.my));
-      e.classList.toggle('row', q.co > 0.6);
+      e.classList.toggle('row', q.co > 0.6); e.classList.toggle('opened', q.m > 0.6);
       const show = q.co > 0.02 && it.hasKids;
       if (show !== it.shown) { ib.style.display = show ? '' : 'none'; it.shown = show; }
       if (!show) return;
@@ -309,16 +367,17 @@ export function start(db: Db): void {
   /* the single now line: at every level it sits at "how far through this cell we are",
      and hands over to the child cell as that cell opens */
   function nowIn(n: Cell, top: number): number | null {
-    const s = L[n.id]; if (!s) return null;
+    const s = L[n.id]; if (!s || !today) return null;
     const tf = nowMin / 1440, y = todayDate.getFullYear();
     const frac = n.lvl === 0 ? (dayOfYear(todayDate) - 1 + tf) / daysInYear(y)
       : n.lvl === 1 ? (todayDate.getDate() - 1 + tf) / daysInMonth(y, n.mi)
       : n.lvl === 2 ? (today.k + tf) / 7 : tf;
+    const child = n.lvl === 0 ? todayMonth! : n.lvl === 1 ? todayWeek! : today;
     const yFrac = top + frac * s.h;
     if (s.m < 0.001) return yFrac;
     if (n.lvl === 3) return lerp(yFrac, nowInDay(n, top, s), s.m);
-    const c = n.lvl === 0 ? todayMonth : n.lvl === 1 ? todayWeek : today, cs = L[c.id];
-    const yc = cs ? nowIn(c, top + s.by + cs.y) : null;
+    const cs = L[child.id];
+    const yc = cs ? nowIn(child, top + s.by + cs.y) : null;
     if (yc == null) return s.m > 0.5 ? null : yFrac;      // today's cell is far off screen: no line
     return lerp(yFrac, yc, s.m);
   }
@@ -344,7 +403,7 @@ export function start(db: Db): void {
     return y;
   }
   function placeNow(): void {
-    const y = nowIn(root, HEAD), ds = L[today.id], ms = L[todayMonth.id];
+    const y = nowIn(root, HEAD), ds = today && L[today.id], ms = todayMonth && L[todayMonth.id];
     const on = y != null && y > HEAD + 1 && y < H - 1;
     nowEl.style.opacity = on ? '1' : '0';
     if (on) nowEl.style.transform = 'translateY(' + px(y) + ')';
@@ -463,14 +522,16 @@ export function start(db: Db): void {
   }
 
   let seq = 0, wheelT = 0;
+  const inSheet = (t: EventTarget | null): boolean => t instanceof Element && !!t.closest('#sheet');
   stage.addEventListener('wheel', e => {
+    if (inSheet(e.target)) return;      // the sheet scrolls on its own
     e.preventDefault(); seq++;
     if (!wheelT) pickFocus(e.clientX, e.clientY);
     zoomTo(S.z - e.deltaY * (e.ctrlKey ? 0.012 : 0.0032), e.clientX, e.clientY);
     clearTimeout(wheelT); wheelT = window.setTimeout(() => { wheelT = 0; settle(); }, 170);
   }, { passive: false });
 
-  interface Gesture { mode: 'tap' | 'pinch' | 'drag' | 'none'; x: number; y: number; t: number; target: Element | null; d0: number; z0: number; key: Key; max: number; start: number; dy: number }
+  interface Gesture { mode: 'tap' | 'pinch' | 'drag' | 'year' | 'none'; x: number; y: number; t: number; target: Element | null; d0: number; z0: number; key: Key; max: number; start: number; dy: number }
   const ptrs = new Map<number, { x: number; y: number }>();
   let g: Gesture | null = null;
   const mid = (): { x: number; y: number; d: number } => {
@@ -479,6 +540,7 @@ export function start(db: Db): void {
   };
   const gesture = (p: Partial<Gesture>): Gesture => ({ mode: 'none', x: 0, y: 0, t: 0, target: null, d0: 1, z0: 0, key: 'z', max: 0, start: 0, dy: 0, ...p });
   stage.addEventListener('pointerdown', e => {
+    if (inSheet(e.target)) return;
     seq++;
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (ptrs.size === 1) g = gesture({ mode: 'tap', x: e.clientX, y: e.clientY, t: performance.now(), target: e.target as Element });
@@ -490,10 +552,12 @@ export function start(db: Db): void {
     if (g.mode === 'pinch' && ptrs.size >= 2) { const c = mid(); zoomTo(g.z0 + Math.log2(c.d / g.d0) * 0.95, c.x, c.y); return; }
     if (g.mode === 'tap' && Math.abs(e.clientY - g.y) > 9) {
       const Lc = Math.round(S.z);
-      g.mode = Lc >= 1 ? 'drag' : 'none';
-      if (Lc >= 1) { g.key = fKey(Lc - 1); g.max = kidCount(Lc - 1) - 1; g.start = S[g.key]; g.y = e.clientY; }
+      g.mode = Lc >= 1 ? 'drag' : 'year';       // at the year, a vertical flick turns to the next or previous year
+      g.y = e.clientY;
+      if (Lc >= 1) { g.key = fKey(Lc - 1); g.max = kidCount(Lc - 1) - 1; g.start = S[g.key]; }
       return;
     }
+    if (g.mode === 'year') { g.dy = e.clientY - g.y; return; }
     if (g.mode === 'drag') {
       g.dy = e.clientY - g.y;
       setDirect(g.key, clamp(g.start - g.dy / (H * 0.55), 0, Math.max(0, g.max)));
@@ -504,7 +568,8 @@ export function start(db: Db): void {
     ptrs.delete(e.pointerId);
     if (!g) return;
     if (g.mode === 'pinch') { if (ptrs.size < 2) { settle(); g = gesture({}); } return; }
-    if (g.mode === 'drag') {
+    if (g.mode === 'year') { if (Math.abs(g.dy) > 70) gotoYear(year + (g.dy < 0 ? 1 : -1)); }
+    else if (g.mode === 'drag') {
       const at = Math.round(S[g.key]), flick = Math.abs(g.dy) > 45 ? (g.dy < 0 ? 1 : -1) : 0;
       if (at === Math.round(g.start) && flick) { setDirect(g.key, at); step(g.key, flick); }
       else glide(g.key, at, 320);
@@ -565,7 +630,8 @@ export function start(db: Db): void {
     if (n !== open) { if (n.parent === open.parent) glide(fKey(Lc - 1), n.k); return; }   // a sibling strip: move to it
     if (n.lvl === 4) {
       const kid = t.closest<HTMLElement>('.kid'), stepModel = kid ? n.model.steps[Number(kid.dataset.j)] : undefined;
-      if (!kid) glide('z', 3);
+      if (t.closest('.name')) openEditor(host, n.model.counter.id);
+      else if (!kid) glide('z', 3);
       else if (stepModel?.tickId) db.removeTick(stepModel.tickId);       // tapping a logged row takes it back
       return;
     }
@@ -595,11 +661,17 @@ export function start(db: Db): void {
     if (a !== 'menu') menu.classList.remove('open');
     if (a === 'crumb') glide('z', Number(e.dataset.l));
     else if (a === 'filter') setFilter(e.dataset.key!);
+    else if (a === 'year') gotoYear(year + Number(e.dataset.d));
     else if (a === 'now') {
-      const near = Math.round(S.f0) === todayMonth.k;
-      ([['f0', todayMonth.k], ['f1', todayWeek.k], ['f2', today.k]] as [Key, number][]).forEach(([k, v]) => (near ? glide(k, v) : setDirect(k, v)));
+      if (!today) { gotoYear(todayDate.getFullYear()); return; }
+      const near = Math.round(S.f0) === todayMonth!.k;
+      ([['f0', todayMonth!.k], ['f1', todayWeek!.k], ['f2', today.k]] as [Key, number][]).forEach(([k, v]) => (near ? glide(k, v) : setDirect(k, v)));
       glide('z', 3);
     } else if (a === 'menu') menu.classList.toggle('open');
+    else if (a === 'counters') openCounters(host);
+    else if (a === 'clear') {
+      if (confirm('Remove every counter and everything logged? Export first if you want to keep it.')) void db.replace(emptyData());
+    }
     else if (a === 'export') exportData();
     else if (a === 'import') fileInput.click();
     else if (a === 'sample') {
@@ -630,6 +702,8 @@ export function start(db: Db): void {
 
   window.addEventListener('keydown', e => {
     const k = e.key;
+    if (sheetOpen(host)) { if (k === 'Escape') closeSheet(host); return; }      // typing in the sheet is not navigation
+    if (Math.round(S.z) === 0 && (k === 'ArrowDown' || k === 'ArrowUp')) { gotoYear(year + (k === 'ArrowDown' ? 1 : -1)); return; }
     if (k === 'ArrowRight' || k === 'Enter') { const to = Math.min(4, Math.floor(S.z + 1.001)); if (to === 4) pickDefaultItem(); glide('z', to); }
     else if (k === 'ArrowLeft' || k === 'Escape') glide('z', Math.max(0, Math.ceil(S.z - 1.001)));
     else if (k === 'ArrowDown' || k === 'ArrowUp') {

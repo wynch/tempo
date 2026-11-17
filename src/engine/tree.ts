@@ -47,7 +47,7 @@ export interface Cell {
   items: ItemNode[];
   parts: PartNode[];
   // view state
-  el?: HTMLElement; lab?: HTMLElement; body?: HTMLElement; heat?: HTMLElement; sum?: HTMLElement; legend?: HTMLElement;
+  el?: HTMLElement; lab?: HTMLElement; body?: HTMLElement; heat?: HTMLElement; sum?: HTMLElement; legend?: HTMLElement; tray?: HTMLElement;
   off?: boolean; bodyOff?: boolean; sig?: string;
 }
 
@@ -59,8 +59,8 @@ export interface Tree {
   byId: Map<string, AnyNode>;
   /** Every view copy of a calendar day. */
   daysByKey: Map<DayKey, Cell[]>;
-  /** The copy of today that sits in its own month. */
-  today: Cell;
+  /** The copy of today that sits in its own month; absent when the tree is for another year. */
+  today?: Cell;
 }
 
 const cell = (p: Partial<Cell> & Pick<Cell, 'id' | 'lvl' | 'k' | 'parent' | 'label' | 'crumb'>): Cell => ({
@@ -70,7 +70,8 @@ const cell = (p: Partial<Cell> & Pick<Cell, 'id' | 'lvl' | 'k' | 'parent' | 'lab
 export function buildYear(year: number, todayKey: DayKey, modelOf: (key: DayKey) => DayModel): Tree {
   const byId = new Map<string, AnyNode>(), daysByKey = new Map<DayKey, Cell[]>();
   const reg = (c: Cell): Cell => { byId.set(c.id, c); return c; };
-  const root = reg(cell({ id: 'y', lvl: 0, k: 0, parent: null, label: '<b>' + year + '</b>', crumb: String(year) }));
+  const arrow = (d: number, glyph: string): string => '<button class="yr" data-act="year" data-d="' + d + '" aria-label="' + (d < 0 ? 'Previous' : 'Next') + ' year">' + glyph + '</button>';
+  const root = reg(cell({ id: 'y', lvl: 0, k: 0, parent: null, label: arrow(-1, '‹') + '<b>' + year + '</b>' + arrow(1, '›'), crumb: String(year) }));
   let today: Cell | undefined;
 
   MONTHS.forEach(([short, rest], mi) => {
@@ -110,7 +111,6 @@ export function buildYear(year: number, todayKey: DayKey, modelOf: (key: DayKey)
     const a = m.kids[m.kids.length - 1]!, b = next.kids[0]!;
     if (a.key === b.key) { a.twinNext = b; b.twinPrev = a; }
   });
-  if (!today) throw new Error('Today (' + todayKey + ') is not in ' + year);
   return { year, root, byId, daysByKey, today };
 }
 
@@ -121,7 +121,7 @@ export function syncItems(day: Cell, byId: Map<string, AnyNode>): void {
   day.items = model.items.map((m, k) => {
     const id = day.id + '|' + m.counter.id;
     const node: ItemNode = old.get(id) ?? { id, lvl: 4, k, parent: day, model: m, hasKids: m.kind !== 'check', kids: [] };
-    node.k = k; node.model = m;
+    node.k = k; node.model = m; node.hasKids = m.kind !== 'check';
     old.delete(id); byId.set(id, node);
     return node;
   });

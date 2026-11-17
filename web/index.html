@@ -24,10 +24,13 @@
     <button data-act="skip" aria-label="Skip step">⏭</button>
   </div>
   <div id="menu">
+    <button data-act="counters">Counters<small>Add, change or remove what you count</small></button>
     <button data-act="export">Export data<small>Save everything as one file</small></button>
     <button data-act="import">Import data<small>Replace everything from a file</small></button>
     <button data-act="sample">Load sample data<small>Replace everything with the demo</small></button>
+    <button data-act="clear">Start empty<small>Remove every counter and its history</small></button>
   </div>
+  <div id="sheet"></div>
   <input type="file" id="file" accept="application/json,.json" hidden>
 </div>
 <script src="app.js"></script>
