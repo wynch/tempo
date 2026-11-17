@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDay } from '../src/model/derive.ts';
 import { keyOfMs } from '../src/model/dates.ts';
-import { HEAD, layout, TITLE, type LayoutInput } from '../src/engine/layout.ts';
+import { HEAD, layout, rulerId, TITLE, type LayoutInput } from '../src/engine/layout.ts';
 import { buildYear } from '../src/engine/tree.ts';
 import { seed } from '../src/store/seed.ts';
 
@@ -104,4 +104,16 @@ test('sliding between two parts keeps their headings in order and their rows att
   const L = layout(tree.root, at(4, [10, 3, 2, 1.5, 0])), a = today.parts[1]!, b = today.parts[2]!;
   assert.ok(L[a.id]!.y < L[b.id]!.y);
   assert.ok(L[b.items[0]!.id]!.y >= L[b.id]!.y + L[b.id]!.h - 0.01, 'a row never rides above its own heading');
+});
+
+test('an open part has an hour ruler in the room under its rows, and only then', () => {
+  const afternoon = today.parts[2]!, gym = afternoon.items[0]!;
+  assert.equal(layout(tree.root, at(3))[rulerId(afternoon)], undefined, 'no ruler in the day view');
+  const L = layout(tree.root, at(4)), r = L[rulerId(afternoon)]!;
+  assert.equal(r.o, 1);
+  assert.ok(r.y >= L[gym.id]!.y + L[gym.id]!.h, 'it starts under the last row');
+  assert.ok(r.y + r.h <= A, 'and ends inside the surface');
+  assert.ok(r.h > 300, 'with real room: ' + r.h);
+  assert.equal(L[rulerId(today.parts[1]!)], undefined, 'the other parts have none');
+  assert.equal(layout(tree.root, at(5))[rulerId(afternoon)]!.o, 0, 'it is gone once an item is open');
 });

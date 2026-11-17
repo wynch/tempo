@@ -41,6 +41,8 @@ export interface PartNode {
   crumb: string;
   items: ItemNode[];
   el?: HTMLElement;
+  /** the hour ruler shown under the rows once the part is open, and what it was last drawn from */
+  ruler?: HTMLElement; rulerSig?: string;
 }
 
 /** A year, month, week or day. */

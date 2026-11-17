@@ -21,6 +21,7 @@
   <div id="wk">
     <span class="brand">Tempo</span>
     <div id="crumbs"></div>
+    <button class="hbtn upd" id="upd" data-act="update" hidden>Update</button>
     <button class="hbtn nowbtn" data-act="now">Now</button>
     <button class="hbtn" data-act="new" aria-label="New counter">+</button>
     <button class="hbtn" data-act="menu" aria-label="Menu">⋯</button>
@@ -39,6 +40,7 @@
     <button data-act="import">Import data<small>Replace everything from a file</small></button>
     <button data-act="sample">Load sample data<small>Replace everything with the demo</small></button>
     <button data-act="clear">Start empty<small>Remove every counter and its history</small></button>
+    <button data-act="check">Check for update<small id="ver"></small></button>
   </div>
   <div id="sheet"></div>
   <input type="file" id="file" accept="application/json,.json" hidden>

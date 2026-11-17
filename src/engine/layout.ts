@@ -11,7 +11,7 @@
    A fractional focus (a drag to a neighbour) is a page turn: both cells stay fully open while the boundary moves. */
 
 import { clamp, lerp, smooth } from '../util.ts';
-import type { Cell, ItemNode } from './tree.ts';
+import type { Cell, ItemNode, PartNode } from './tree.ts';
 
 /** Tunables, settled in the motion study. */
 export const P = { strip: 48, d0: 0.15, d1: 0.8, split: 0.5, glide: 460, snap: 0.18 };
@@ -50,6 +50,8 @@ const mix3 = (from: number, anchor: number, row: number, pa: number, pb: number)
 const weight = (k: number, f: number, n: number): number => (f < 0 ? 0 : n === 1 ? 1 : clamp(10 - 10 * Math.abs(k - f), 0, 1));
 
 export const stepId = (it: ItemNode, j: number): string => it.id + '#' + j;
+export const rulerId = (p: PartNode): string => p.id + '~ruler';
+const RULER_GAP = 14;
 
 export function layout(root: Cell, input: LayoutInput): Layout {
   const out: Layout = {}, A = input.H - HEAD;
@@ -168,6 +170,9 @@ function layDay(out: Layout, inp: LayoutInput, d: Cell, h: number, sx: number, s
     const mi = smooth(P.d0, P.d1, tb);
     out[p.id] = box({ y: top * sc, w: W, h: headH * sc, o: pb * smooth(17, 25, headH * sc), m: gf * wg * (1 - tb),
                       bh: (headH + nI * pitch + growA(g) * wg + (fi >= 0 ? grow : 0)) * sc });
+    // the room an open part gains under its rows holds its hour ruler
+    const rulerH = growA(g) * wg - (headH - PH) - RULER_GAP - 14;      // the title is taller than the heading it grew from
+    if (rulerH > 0) out[rulerId(p)] = box({ y: (top + headH + nI * pitch + RULER_GAP) * sc, w: W, h: rulerH * sc, o: pb * gf * wg * (1 - tb) * smooth(110, 170, rulerH) });
     p.items.forEach((it, k) => {
       const wk = weight(k, fi, nI), im = mi * wk;
       const rx = lerp(PADX, 0, im), rw = W - 2 * rx, rh = (RH + grow * wk) * sc, ry = (top + headH + rowTop(k)) * sc;

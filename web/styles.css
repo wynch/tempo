@@ -207,3 +207,19 @@ body{-webkit-touch-callout:none}
 #empty.on{display:grid}
 #empty b{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){ #sheet,#sheet .panel,.item,.item .card{transition:none!important} }
+
+/* a newer build is waiting */
+#wk .upd{color:var(--paper);background:var(--now);border-color:var(--now);font-weight:600;margin-left:auto}
+#wk .upd:not([hidden])+.nowbtn{margin-left:0}
+
+/* the hour ruler of an open part of day: hour lines, and what was logged, at its time */
+.ruler{position:absolute;left:0;top:0;pointer-events:none}
+.ruler .hr{position:absolute;left:0;right:0;height:0;border-top:1px solid var(--line)}
+.ruler .hr span{position:absolute;left:12px;top:-7px;padding-right:6px;background:var(--paper);font-size:10px;line-height:14px;
+  color:var(--mute);font-variant-numeric:tabular-nums}
+.ruler .tk{position:absolute;left:calc(58px + var(--lane,0)*33.3% - var(--lane,0)*20px);transform:translateY(-50%);display:flex;align-items:center;gap:5px;
+  max-width:calc(33.3% - 10px);padding:2px 8px 2px 6px;border-radius:99px;white-space:nowrap;font-size:12px;line-height:16px;
+  background:color-mix(in srgb,var(--c) 20%,var(--paper))}
+.ruler .tk::before{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:var(--c)}
+.ruler .tk b{font-weight:600;overflow:hidden;text-overflow:ellipsis}
+.ruler .tk small{color:var(--mute);font-size:10px;font-variant-numeric:tabular-nums}

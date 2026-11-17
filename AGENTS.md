@@ -28,6 +28,7 @@ Node 24 runs the tests straight from `.ts` files, so imports carry the `.ts` ext
 | `src/engine/layout.ts` | Pure: depth and focus → numbers per node. The motion rules live here. |
 | `src/engine/app.ts` | State, the DOM view, the session clock, input, the menu |
 | `src/ui/editor.ts` | The sheet that lists, creates and edits counters |
+| `src/ui/update.ts` | Sees that a newer build is deployed, and switches to it |
 | `src/main.ts` | Opens the database, seeds on first run, registers the service worker, starts the app |
 | `web/` | `index.html`, `styles.css`, the manifest, icons and `sw.js`, copied to `dist/` (the build stamps `sw.js` with a hash) |
 | `test/` | Tests for dates, derivations, the store and the layout |
@@ -70,13 +71,15 @@ How some of it works:
 - Direct editing (`hold`, and the `swipe` gesture in `app.ts`): a long press (480 ms) on a row opens its counter, with a ring building on the row while it is held; a long press on the open day's background or on a part-of-day heading starts a new counter there. A row of the open day swipes sideways: right past the threshold runs its own action (Done, Undo, +1, Play), left opens the editor; the row carries the label of what letting go will do. The "+" in the header starts a new counter. The sheet slides up; Cancel returns to where it was opened from.
 - Part of day is a level of its own (`PartNode`, depth 4): All day, the parts from the settings, then "This week" and "This month". The day view is unchanged (headings with their rows). Zooming into a part makes it take the day's body, its heading growing into a title with the hours it covers, while the other parts keep their size and slide off; rows keep their size, the part gains room. An item then opens inside its part the same way (`layDay` holds both stops). Tapping an item from the day goes straight to it, past its part. Moving past the last item of a part goes out to the part, across, and back in (`crossPart`).
 - Items are positioned in the day's body, not inside their part's element: a part's element is only its heading. Their focus path is part (`f3`) then item (`f4`).
+- An open part shows an hour ruler in the room under its rows (`rulerId` in the layout, `fillRuler` in `app.ts`): a line per hour over the hours the part covers (the whole day for "All day", none for the floating groups), and every tick of that day within those hours as a pill at its time, in up to three lanes. On today's ruler the now line sits at its true time.
+- Updates: the build writes one id (a hash of `src/` and `web/`) into the bundle, `version.json` and the service worker's cache name. A running copy compares itself with `version.json` (`src/ui/update.ts`) shortly after start, when it comes back to the front, and every 15 minutes; a newer build shows an Update button in the header, and the menu has "Check for update". The service worker fetches with `no-cache` so GitHub Pages' ten-minute HTTP cache cannot serve an old file.
 - The breadcrumb shows at most the three nearest ancestors; older crumbs and the brand give way.
 - IndexedDB is at version 2 (the `placements` store). An export without `placements` still loads.
 - The tree holds one year. Another year is named in the address (`#2025`) and changing year reloads the page.
 - A structural change (counter, plan, import) rebuilds every day from the records (`refreshAll`); a tick rebuilds only its days (`refreshDays`).
 - The service worker is network-first, so a deploy shows at once and the cache only answers offline.
 
-Not done: holding a dragged chip over a row to spring it open and drop one level deeper; an hour ruler inside an open part, with ticks placed at their times; editing the parts of day (names and boundaries); elastic plans (due some days after the last tick) are in the model but not offered; reordering counters; archiving instead of deleting; reminders (no push server, so nothing can fire while the app is closed). Touch pinch is written but untested on a real phone.
+Not done: holding a dragged chip over a row to spring it open and drop one level deeper; adding or moving a tick by touching the hour ruler; editing the parts of day (names and boundaries); elastic plans (due some days after the last tick) are in the model but not offered; reordering counters; archiving instead of deleting; reminders (no push server, so nothing can fire while the app is closed). Touch pinch is written but untested on a real phone.
 
 ## Rules
 

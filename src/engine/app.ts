@@ -8,8 +8,9 @@ import type { Db } from '../store/db.ts';
 import { emptyData } from '../store/db.ts';
 import { seed } from '../store/seed.ts';
 import { closeSheet, openCounters, openEditor, sheetOpen, type EditorHost } from '../ui/editor.ts';
+import { applyUpdate, BUILD, updateAvailable, watchForUpdates } from '../ui/update.ts';
 import { clamp, ease, hhmm, lerp, mmss, smooth, spanText } from '../util.ts';
-import { HEAD, layout, P, stepId, type Box, type Layout } from './layout.ts';
+import { HEAD, layout, P, rulerId, stepId, type Box, type Layout } from './layout.ts';
 import { buildYear, syncItems, type AnyNode, type Cell, type ItemNode, type KidView, type PartNode } from './tree.ts';
 
 /** A circuit being played. Kept after it ends so its rows can settle; replaced when it is played again. */
@@ -334,6 +335,41 @@ export function start(db: Db): void {
     const next = parts[pi];
     return hhmm(p.start) + '–' + (next ? hhmm(next.start) : '24:00');
   }
+  /** The minutes of the day a part covers: its own hours, the whole day for "All day", nothing for a floating group. */
+  function partRange(pi: number): [number, number] | null {
+    const parts = db.settings.parts;
+    if (pi === 0) return [0, 1440];
+    const p = parts[pi - 1];
+    return p ? [p.start, parts[pi]?.start ?? 1440] : null;
+  }
+  /** Draws a part's hour ruler: a line per hour, and everything logged that day within those hours, at its time. */
+  function fillRuler(p: PartNode, day: Cell, range: [number, number]): void {
+    const [from, to] = range, span = to - from, ruler = p.ruler!;
+    const ticks = db.ticksOn(day.key).map(t => ({ t, min: minutesOfDay(t.at) })).filter(x => x.min >= from && x.min < to).sort((a, b) => a.min - b.min);
+    const sig = from + '-' + to + ':' + ticks.map(x => x.t.id).join(',');
+    if (p.rulerSig === sig) return;
+    p.rulerSig = sig;
+    ruler.replaceChildren();
+    const every = span > 12 * 60 ? 180 : span > 7 * 60 ? 120 : 60;       // fewer hour lines on a long span
+    for (let m = Math.ceil(from / every) * every; m <= to; m += every) {
+      const line = el('div', 'hr', ruler);
+      line.style.top = ((m - from) / span * 100) + '%';
+      el('span', '', line).textContent = hhmm(m);
+    }
+    // things logged close together sit side by side, in up to three lanes
+    const lanes = [-1, -1, -1], near = span * 0.07;
+    ticks.forEach(({ t, min }) => {
+      const c = db.counters.find(x => x.id === t.counterId); if (!c) return;
+      let lane = lanes.findIndex(last => min - last >= near);
+      if (lane < 0) lane = lanes.indexOf(Math.min(...lanes));
+      lanes[lane] = min;
+      const pill = el('div', 'tk', ruler);
+      pill.style.top = ((min - from) / span * 100) + '%';
+      pill.style.setProperty('--lane', String(lane)); pill.style.setProperty('--c', 'var(--c-' + c.color + ')');
+      el('b', '', pill).textContent = c.short ?? c.name;
+      el('small', '', pill).textContent = hhmm(min);
+    });
+  }
   function applyDay(n: Cell, s: Box): void {
     const body = n.body!, first = n.items[0];
     const shown = !!first && !!L[first.id], iv = shown ? smooth(14, 26, s.w) : 0;
@@ -352,6 +388,13 @@ export function start(db: Db): void {
         p.el.dataset.id = p.id; p.el.dataset.part = db.settings.parts[p.pi - 1]?.id ?? '';
       }
       place(p.el, q.x, q.y, q.w, q.h); p.el.style.opacity = q.o.toFixed(3); p.el.style.setProperty('--m', q.m.toFixed(3));
+      const r = L[rulerId(p)], range = partRange(p.pi), show = !!r && !!range && r.o > 0.01;
+      if (show) {
+        p.ruler ??= el('div', 'ruler', body);
+        fillRuler(p, n, range);
+        place(p.ruler, r.x, r.y, r.w, r.h); p.ruler.style.opacity = r.o.toFixed(3);
+      }
+      if (p.ruler) p.ruler.style.display = show ? '' : 'none';
     });
     n.items.forEach(it => {
       const q = L[it.id]; if (!q) return;
@@ -422,6 +465,11 @@ export function start(db: Db): void {
       const ph = firstOfPart ? L[d.id + 'p' + before.model.part] : undefined;
       if (b) y += ph ? ph.y + ph.h * 0.25 : b.y - 3;
     } else if (last && L[last.id]) { const b = L[last.id]!; y += b.y + b.h + 4; }   // everything is done: the line sits after the list
+    // in an open part whose hours hold the present moment, the line sits at its true time on the ruler
+    const open = d === focusCell(3) ? focusPart() : undefined, r = open && L[rulerId(open)], range = open && partRange(open.pi);
+    if (r && range && d.model!.today && nowMin >= range[0] && nowMin < range[1]) {
+      y = lerp(y, top + s.by + r.y + (nowMin - range[0]) / (range[1] - range[0]) * r.h, clamp(r.o, 0, 1));
+    }
     const playing = d.items.find(it => live(runOf(it), it));
     if (playing && S.rb > 0.001) {
       const g = L[playing.id], r = runOf(playing)!;
@@ -798,7 +846,13 @@ export function start(db: Db): void {
       const near = Math.round(S.f0) === todayMonth!.k;
       ([['f0', todayMonth!.k], ['f1', todayWeek!.k], ['f2', today.k]] as [Key, number][]).forEach(([k, v]) => (near ? glide(k, v) : setDirect(k, v)));
       glide('z', 3);
-    } else if (a === 'menu') menu.classList.toggle('open');
+    } else if (a === 'menu') { menu.classList.toggle('open'); verEl.textContent = 'Version ' + BUILD; }
+    else if (a === 'update') void applyUpdate();
+    else if (a === 'check') {
+      menu.classList.add('open'); verEl.textContent = 'Checking…';
+      void updateAvailable().then(yes => { if (yes) void applyUpdate(); else verEl.textContent = 'Version ' + BUILD + ' is the latest'; });
+      return;
+    }
     else if (a === 'counters') openCounters(host);
     else if (a === 'clear') {
       if (confirm('Remove every counter and everything logged? Export first if you want to keep it.')) void db.replace(emptyData());
@@ -853,6 +907,9 @@ export function start(db: Db): void {
   window.addEventListener('resize', resize);
   resize();
   showEmpty();
+  // a newer build has been deployed: offer it in the header
+  const verEl = byIdEl('ver');
+  watchForUpdates(() => { byIdEl('upd').hidden = false; });
   // for poking at it from the console
   (window as unknown as { tempo: unknown }).tempo = { S, db, tree, glide, setDirect, setFilter, apply, frame, monthOf: (i: number) => MONTHS[i], get L() { return L; } };
   requestAnimationFrame(frame);
