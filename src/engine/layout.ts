@@ -1,6 +1,6 @@
 /* Layout: a pure function from (depth, focus path, size) to numbers keyed by node id. No DOM.
 
-   One surface, one number: `z` is the depth (0 year, 1 month, 2 week, 3 day, 4 item).
+   One surface, one number: `z` is the depth (0 year, 1 month, 2 week, 3 day, 4 part of day, 5 item).
    Every cell has three states: a mark inside its grandparent, a row inside its parent, and opened.
    `r` is a cell's row-ness, `m` its open-ness.
 
@@ -27,15 +27,15 @@ export interface Box {
   tz: number; pa: number;
   /** items: mark size and offset, content opacity */
   s: number; mx: number; my: number; co: number;
-  /** steps: how much this is the current one. parts: opacity. */
+  /** steps: how much this is the current one. parts of day: opacity of the heading. */
   cur: number; o: number;
 }
 export type Layout = Record<string, Box>;
 
 export interface LayoutInput {
   z: number;
-  /** focused child at each level: month, week, day, item. May be fractional while sliding. */
-  f: [number, number, number, number];
+  /** focused child at each level: month, week, day, part of day, item. May be fractional while sliding. */
+  f: [number, number, number, number, number];
   W: number;
   H: number;
   /** per-step "current" weights of an item that has a live run, else null */
@@ -116,46 +116,68 @@ function layCell(out: Layout, inp: LayoutInput, node: Cell, w: number, h: number
   });
 }
 
+/* A day. Its parts of day are stacked groups: a heading, then the rows of its items.
+   Two more stops live here. Depth 3 → 4 zooms into a part: it grows to fill the day while the other parts keep
+   their size and slide off. Depth 4 → 5 zooms into one item of that part, in the same way. */
 function layDay(out: Layout, inp: LayoutInput, d: Cell, h: number, sx: number, sy: number, sw: number, sh: number,
                 by: number, m: number, pa: number, pb: number, tz: number, pw: number): void {
-  const items = d.items, n = items.length, W = inp.W;
+  const n = d.items.length, groups = d.parts, G = groups.length, W = inp.W;
   if (!n || (sw < 14 && m === 0)) return;                    // too small for its items: the cell shows its heat instead
   const full = inp.H - HEAD - TITLE * (1 - tz);              // body height once the day is fully open
   const sc = m > 0 ? clamp((h - by) / full, 0.04, 1) : 1;    // the list is scaled to the room the day has right now
-  let cy = 2; const rowY: number[] = [], partY: Record<number, number> = {};
-  d.parts.forEach(p => {
-    partY[p.pi] = cy; cy += PH;
-    items.forEach((it, k) => { if (it.model.part === p.pi) { rowY[k] = cy; cy += RH + RGAP; } });
-  });
-  // the focused item takes the body; the others keep their size and slide off
-  const f = pw > 0 && tz > 0 ? clamp(inp.f[3], 0, n - 1) : -1;
-  const hf2 = RH * Math.pow(full / RH, tz), grow = hf2 - RH;
-  const topAt = (i: number): number => clamp(rowY[i]! / Math.max(1, full - RH), 0, 1) * (full - hf2);   // where item i sits when it is the focus
-  let scroll = 0;
-  if (f >= 0 && n > 1) {                                                                // a page turn, as for the cells above
-    const i = Math.min(n - 2, Math.floor(f)), u = f - i;
-    const top = lerp(topAt(i) + hf2 + (rowY[i + 1]! - rowY[i]! - RH), topAt(i + 1), u);   // top of item i+1
-    scroll = rowY[i + 1]! + grow * weight(i, f, n) - top;
-  } else if (f >= 0) scroll = rowY[0]! - topAt(0);
-  const pushed = (restY: number): number => {
+  const pitch = RH + RGAP, gy: number[] = [], gh: number[] = [];
+  let cy = 2;
+  groups.forEach((p, g) => { gy[g] = cy; gh[g] = PH + p.items.length * pitch; cy += gh[g]!; });
+
+  // the focused part takes the body; the others keep their size and slide off
+  const fp = pw > 0 && tz > 0 ? clamp(inp.f[3], 0, G - 1) : -1;
+  const R = full / RH, gf = tz > 0 ? (Math.pow(R, tz) - 1) / (R - 1) : 0;      // how far the part has grown, geometrically
+  const growA = (g: number): number => Math.max(0, full - gh[g]!) * gf;
+  const topAtA = (i: number): number => gy[i]! * (1 - gf);                     // where part i sits when it is the focus
+  let scrollA = 0;
+  if (fp >= 0 && G > 1) {                                                      // a page turn between parts
+    const i = Math.min(G - 2, Math.floor(fp)), u = fp - i;
+    scrollA = gy[i + 1]! + growA(i) * weight(i, fp, G) - lerp(topAtA(i) + gh[i]! + growA(i), topAtA(i + 1), u);
+  } else if (fp >= 0) scrollA = gy[0]! - topAtA(0);
+  const groupTop = (g: number): number => {
     let e = 0;
-    for (let k = 0; k < n; k++) if (rowY[k]! < restY) e += grow * weight(k, f, n);
-    return restY + e - scroll;
+    for (let j = 0; j < g; j++) e += growA(j) * weight(j, fp, G);
+    return gy[g]! + e - scrollA;
   };
-  const mi = smooth(P.d0, P.d1, tz);
+
+  const tItem = pw > 0 ? clamp(inp.z - 4, 0, 1) * pw : 0;    // how far we have zoomed into the focused part's focused item
   const ms = clamp(Math.min(sh, sw / (n * 1.45)), 2, 18);    // mark size follows the room available
-  d.parts.forEach(p => {
-    out[p.id] = box({ x: PADX, y: pushed(partY[p.pi]!) * sc, w: W - 2 * PADX, h: PH * sc, o: pb * smooth(17, 25, PH * sc) });
-  });
-  items.forEach((it, k) => {
-    const wk = weight(k, f, n), im = mi * wk;
-    const rx = lerp(PADX, 0, im), rw = W - 2 * rx, rh = (RH + grow * wk) * sc, ry = pushed(rowY[k]!) * sc;
-    const sR = Math.min(20, rh * 0.62);                              // the mark's size once it sits in its row
-    const ax = rx + 13 * sc, ay = ry + Math.min((rh - sR) / 2, 18);  // and where it sits
-    const x = mix3(sx + k * ms * 1.45, ax, rx, pa, pb), y = mix3(sy + (sh - ms) / 2 - by, ay, ry, pa, pb);
-    const s = lerp(ms, sR, pa), ww = lerp(s, rw, pb), hh = lerp(s, rh, pb);
-    out[it.id] = box({ x, y, w: ww, h: hh, r: pb, m: im, s, mx: (ax - rx) * pb, my: (ay - ry) * pb, co: pb * smooth(34, 50, rh), bh: hh });
-    if (it.hasKids && pb > 0.01) laySteps(out, inp, it, hh, rw, rh, im);
+  groups.forEach((p, g) => {
+    const wg = weight(g, fp, G), tb = tItem * wg, nI = p.items.length;
+    const headH = lerp(PH, TITLE, gf * wg) * (1 - tb);       // the heading grows into a title, then gives way to the item
+    const top = groupTop(g), room = full - headH;            // room for this part's rows once it is open
+    // within the part: the focused item takes the room; the others keep their size and slide off
+    const fi = tb > 0 ? clamp(inp.f[4], 0, nI - 1) : -1;
+    const hf = RH * Math.pow(Math.max(1, room / RH), tb), grow = hf - RH;
+    const topAt = (i: number): number => clamp(i * pitch / Math.max(1, room - RH), 0, 1) * (room - hf);
+    let scroll = 0;
+    if (fi >= 0 && nI > 1) {
+      const i = Math.min(nI - 2, Math.floor(fi)), u = fi - i;
+      scroll = (i + 1) * pitch + grow * weight(i, fi, nI) - lerp(topAt(i) + hf + RGAP, topAt(i + 1), u);
+    } else if (fi >= 0) scroll = -topAt(0);
+    const rowTop = (k: number): number => {
+      let e = 0;
+      for (let j = 0; j < k; j++) e += grow * weight(j, fi, nI);
+      return k * pitch + e - scroll;
+    };
+    const mi = smooth(P.d0, P.d1, tb);
+    out[p.id] = box({ y: top * sc, w: W, h: headH * sc, o: pb * smooth(17, 25, headH * sc), m: gf * wg * (1 - tb),
+                      bh: (headH + nI * pitch + growA(g) * wg + (fi >= 0 ? grow : 0)) * sc });
+    p.items.forEach((it, k) => {
+      const wk = weight(k, fi, nI), im = mi * wk;
+      const rx = lerp(PADX, 0, im), rw = W - 2 * rx, rh = (RH + grow * wk) * sc, ry = (top + headH + rowTop(k)) * sc;
+      const sR = Math.min(20, rh * 0.62);                              // the mark's size once it sits in its row
+      const ax = rx + 13 * sc, ay = ry + Math.min((rh - sR) / 2, 18);  // and where it sits
+      const x = mix3(sx + it.gk * ms * 1.45, ax, rx, pa, pb), y = mix3(sy + (sh - ms) / 2 - by, ay, ry, pa, pb);
+      const s = lerp(ms, sR, pa), ww = lerp(s, rw, pb), hh = lerp(s, rh, pb);
+      out[it.id] = box({ x, y, w: ww, h: hh, r: pb, m: im, s, mx: (ax - rx) * pb, my: (ay - ry) * pb, co: pb * smooth(34, 50, rh), bh: hh });
+      if (it.hasKids && pb > 0.01) laySteps(out, inp, it, hh, rw, rh, im);
+    });
   });
 }
 

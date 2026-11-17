@@ -13,7 +13,8 @@ const tree = buildYear(2026, '2026-11-18', key =>
   buildDay({ counters: data.counters, plans: data.plans, settings: data.settings, todayKey: '2026-11-18', ticksOn: k => byDay.get(k) ?? [] }, key));
 const today = tree.today!;
 const W = 430, H = 860, A = H - HEAD;
-const at = (z: number, f: [number, number, number, number] = [10, 3, 2, 3]): LayoutInput => ({ z, f, W, H, cur: () => null });
+type Focus = [number, number, number, number, number];      // month, week, day, part of day, item
+const at = (z: number, f: Focus = [10, 3, 2, 2, 0]): LayoutInput => ({ z, f, W, H, cur: () => null });
 const near = (a: number, b: number, msg: string) => assert.ok(Math.abs(a - b) < 0.01, msg + ': ' + a + ' vs ' + b);
 
 test('the tree: twelve months, whole weeks, one today', () => {
@@ -34,12 +35,12 @@ test('a tree for another year has no today, and its edge weeks reach into the ne
   assert.equal(y25.today, undefined);
   const last = y25.root.kids[11]!.kids.at(-1)!;
   assert.deepEqual(last.kids.map(d => d.key).slice(-4), ['2026-01-01', '2026-01-02', '2026-01-03', '2026-01-04']);
-  assert.ok(Object.values(layout(y25.root, at(0, [0, 0, 0, 0]))).every(b => Number.isFinite(b.h)));
+  assert.ok(Object.values(layout(y25.root, at(0, [0, 0, 0, 0, 0]))).every(b => Number.isFinite(b.h)));
 });
 
 test('every depth and every slide gives finite numbers', () => {
-  const focuses: [number, number, number, number][] = [[10, 3, 2, 3], [10, 3, 2.5, 3], [10, 2.5, 2, 0], [9.5, 3, 2, 0], [10, 3, 2, 2.5], [0, 0, 0, 0], [11, 4, 6, 1]];
-  for (let z = 0; z <= 4.001; z += 0.125) for (const f of focuses) {
+  const focuses: Focus[] = [[10, 3, 2, 2, 0], [10, 3, 2.5, 1, 0], [10, 2.5, 2, 0, 0], [9.5, 3, 2, 0, 0], [10, 3, 2, 1.5, 0], [10, 3, 2, 0, 0.5], [0, 0, 0, 0, 0], [11, 4, 6, 1, 1]];
+  for (let z = 0; z <= 5.001; z += 0.125) for (const f of focuses) {
     const L = layout(tree.root, at(z, f));
     for (const [id, b] of Object.entries(L)) for (const [k, v] of Object.entries(b)) assert.ok(Number.isFinite(v), `${id}.${k} at z=${z} f=${f}`);
   }
@@ -71,8 +72,36 @@ test('travel comes before unfold: children are never wide while still on the mov
 });
 
 test('a slide between neighbours keeps both cells fully open', () => {
-  const L = layout(tree.root, at(3, [10, 3, 2.5, 0])), wk = today.parent!;
+  const L = layout(tree.root, at(3, [10, 3, 2.5, 0, 0])), wk = today.parent!;
   assert.equal(L[wk.kids[2]!.id]!.m, 1);
   assert.equal(L[wk.kids[3]!.id]!.m, 1);
   near(L[wk.kids[3]!.id]!.y, L[wk.kids[2]!.id]!.y + L[wk.kids[2]!.id]!.h, 'the two pages touch');
+});
+
+test('part of day is a stop of its own between the day and an item', () => {
+  // Wednesday 18 November has All day, Morning, Afternoon (the gym) and Evening
+  assert.deepEqual(today.parts.map(p => p.name), ['All day', 'Morning', 'Afternoon', 'Evening']);
+  const afternoon = today.parts[2]!, gym = afternoon.items[0]!;
+  assert.equal(gym.model.counter.id, 'gym');
+  assert.equal(gym.parent, afternoon);
+
+  const day = layout(tree.root, at(3)), part = layout(tree.root, at(4)), item = layout(tree.root, at(5));
+  // at the day, the headings are stacked with their rows and nothing is zoomed
+  assert.ok(day[afternoon.id]!.y > day[today.parts[1]!.id]!.y);
+  assert.equal(day[afternoon.id]!.m, 0);
+  // at the part, its heading is the title at the top, its rows sit under it, and the next part is off screen
+  near(part[afternoon.id]!.y, 0, 'the open part starts at the top');
+  assert.equal(part[afternoon.id]!.m, 1);
+  near(part[gym.id]!.y, part[afternoon.id]!.h, 'its first row sits under the title');
+  near(part[gym.id]!.h, day[gym.id]!.h, 'rows keep their size: the part gains room, the rows do not stretch');
+  assert.ok(part[today.parts[3]!.id]!.y >= A, 'the following part has slid off');
+  // at the item, it fills the day
+  near(item[gym.id]!.y, 0, 'the open item starts at the top');
+  near(item[gym.id]!.h, A, 'and fills the surface');
+});
+
+test('sliding between two parts keeps their headings in order and their rows attached', () => {
+  const L = layout(tree.root, at(4, [10, 3, 2, 1.5, 0])), a = today.parts[1]!, b = today.parts[2]!;
+  assert.ok(L[a.id]!.y < L[b.id]!.y);
+  assert.ok(L[b.items[0]!.id]!.y >= L[b.id]!.y + L[b.id]!.h - 0.01, 'a row never rides above its own heading');
 });

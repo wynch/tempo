@@ -24,7 +24,7 @@ Node 24 runs the tests straight from `.ts` files, so imports carry the `.ts` ext
 | `src/store/db.ts` | `Db`: all records in memory, changes written through a `Persistence`; `validate`, export, import |
 | `src/store/idb.ts` | IndexedDB persistence |
 | `src/store/seed.ts` | Sample data for a first run: five counters and the year so far |
-| `src/engine/tree.ts` | The view tree for one year (year → months → weeks → days → items) |
+| `src/engine/tree.ts` | The view tree for one year (year → months → weeks → days → parts of day → items) |
 | `src/engine/layout.ts` | Pure: depth and focus → numbers per node. The motion rules live here. |
 | `src/engine/app.ts` | State, the DOM view, the session clock, input, the menu |
 | `src/ui/editor.ts` | The sheet that lists, creates and edits counters |
@@ -44,7 +44,7 @@ Node 24 runs the tests straight from `.ts` files, so imports carry the `.ts` ext
 
 ## The interface rules
 
-- One surface and one number: depth `z` (0 year, 1 month, 2 week, 3 day, 4 item). In-between depths are usable states.
+- One surface and one number: depth `z` (0 year, 1 month, 2 week, 3 day, 4 part of day, 5 item). In-between depths are usable states.
 - Every cell has three states: a mark inside its grandparent, a row inside its parent, and opened (`r` row-ness, `m` open-ness).
 - Nothing is replaced: a node is the same element at every depth and shows more as it gains room.
 - A cell opening moves its children in two beats: travel (small marks go to the start of their rows), then unfold (they widen into rows). Rows always fit the parent's current height. Text shows only once a row is tall and wide enough.
@@ -61,19 +61,22 @@ Node 24 runs the tests straight from `.ts` files, so imports carry the `.ts` ext
 
 ## State of things
 
-Done: model, store, export/import; the engine on real dates; ticking (check, +1, removing a logged row by tapping it); the session player writing to the log; creating, editing and deleting counters, rhythms and circuits; week and month plans with their tray and the refine drag; other years; reduced motion; offline install; deploy.
+Done: model, store, export/import; the engine on real dates; ticking (check, +1, removing a logged row by tapping it); the session player writing to the log; creating, editing and deleting counters, rhythms and circuits; week and month plans with their tray and the refine drag; part of day as a zoom stop; other years; reduced motion; offline install; deploy.
 
 How some of it works:
 - Changing a rhythm ends the old plan yesterday and starts a new one today (`Db.setPlan`), so past days keep the plan they had.
 - A week or month plan floats: its item sits in every day of the period under "This week" / "This month", is counted over the whole period (`periodN`), and never shows as missed. A tick therefore refreshes every day of its period.
 - Refine: dragging a chip from a week's or month's tray onto a day pins the floating plan there (a `Placement`; `Db.togglePlacement`). A pinned item sits with the day's own items, can be missed, and counts in the day's score. Dropping the chip on a pinned day unpins it. Once as many days are pinned as the plan asks for, the plan no longer floats over the other days of the period. Past days refuse the drop. The drag is the `refine` gesture in `app.ts`.
 - Direct editing (`hold`, and the `swipe` gesture in `app.ts`): a long press (480 ms) on a row opens its counter, with a ring building on the row while it is held; a long press on the open day's background or on a part-of-day heading starts a new counter there. A row of the open day swipes sideways: right past the threshold runs its own action (Done, Undo, +1, Play), left opens the editor; the row carries the label of what letting go will do. The "+" in the header starts a new counter. The sheet slides up; Cancel returns to where it was opened from.
+- Part of day is a level of its own (`PartNode`, depth 4): All day, the parts from the settings, then "This week" and "This month". The day view is unchanged (headings with their rows). Zooming into a part makes it take the day's body, its heading growing into a title with the hours it covers, while the other parts keep their size and slide off; rows keep their size, the part gains room. An item then opens inside its part the same way (`layDay` holds both stops). Tapping an item from the day goes straight to it, past its part. Moving past the last item of a part goes out to the part, across, and back in (`crossPart`).
+- Items are positioned in the day's body, not inside their part's element: a part's element is only its heading. Their focus path is part (`f3`) then item (`f4`).
+- The breadcrumb shows at most the three nearest ancestors; older crumbs and the brand give way.
 - IndexedDB is at version 2 (the `placements` store). An export without `placements` still loads.
 - The tree holds one year. Another year is named in the address (`#2025`) and changing year reloads the page.
 - A structural change (counter, plan, import) rebuilds every day from the records (`refreshAll`); a tick rebuilds only its days (`refreshDays`).
 - The service worker is network-first, so a deploy shows at once and the cache only answers offline.
 
-Not done: holding a dragged chip over a row to spring it open and drop one level deeper; part of day as a zoom stop, and editing the parts of day; elastic plans (due some days after the last tick) are in the model but not offered; reordering counters; archiving instead of deleting; reminders (no push server, so nothing can fire while the app is closed). Touch pinch is written but untested on a real phone.
+Not done: holding a dragged chip over a row to spring it open and drop one level deeper; an hour ruler inside an open part, with ticks placed at their times; editing the parts of day (names and boundaries); elastic plans (due some days after the last tick) are in the model but not offered; reordering counters; archiving instead of deleting; reminders (no push server, so nothing can fire while the app is closed). Touch pinch is written but untested on a real phone.
 
 ## Rules
 

@@ -1,4 +1,4 @@
-// The view tree for one year: year → months → weeks → days → items.
+// The view tree for one year: year → months → weeks → days → parts of day → items.
 // A month lists every week it touches, and each week holds all seven of its days. Days that belong to
 // another month are flagged `out`: hidden while the month shows the week as a strip, whole once the week opens.
 // So a straddling week appears under two months; both copies show the same DayModel, which lives once.
@@ -14,9 +14,13 @@ export interface KidView {
 
 export interface ItemNode {
   id: string;
-  lvl: 4;
+  lvl: 5;
+  /** index within its part of day */
   k: number;
-  parent: Cell;
+  /** index within the whole day, used when the day shows its items as a strip of marks */
+  gk: number;
+  parent: PartNode;
+  day: Cell;
   model: ItemModel;
   hasKids: boolean;
   // view state
@@ -25,7 +29,19 @@ export interface ItemNode {
   kids: KidView[];
 }
 
-export interface PartNode { pi: number; id: string; name: string; el?: HTMLElement }
+/** A part of the day (All day, Morning, …, This week): a level of its own between the day and its items. */
+export interface PartNode {
+  id: string;
+  lvl: 4;
+  k: number;
+  parent: Cell;
+  /** which group it is: 0 all day, then the parts of day, then the floating plans of the week and month */
+  pi: number;
+  name: string;
+  crumb: string;
+  items: ItemNode[];
+  el?: HTMLElement;
+}
 
 /** A year, month, week or day. */
 export interface Cell {
@@ -51,7 +67,7 @@ export interface Cell {
   off?: boolean; bodyOff?: boolean; sig?: string;
 }
 
-export type AnyNode = Cell | ItemNode;
+export type AnyNode = Cell | PartNode | ItemNode;
 
 export interface Tree {
   year: number;
@@ -114,23 +130,27 @@ export function buildYear(year: number, todayKey: DayKey, modelOf: (key: DayKey)
   return { year, root, byId, daysByKey, today };
 }
 
-/** Brings a day's item and part nodes in line with its model, keeping existing nodes (and their elements) where it can. */
+/** Brings a day's part and item nodes in line with its model, keeping existing nodes (and their elements) where it can. */
 export function syncItems(day: Cell, byId: Map<string, AnyNode>): void {
   const model = day.model!;
+  const oldParts = new Map(day.parts.map(p => [p.pi, p]));
+  day.parts = model.parts.map((p, k) => {
+    const id = day.id + 'p' + p.pi;
+    const node: PartNode = oldParts.get(p.pi) ?? { id, lvl: 4, k, parent: day, pi: p.pi, name: p.name, crumb: p.name, items: [] };
+    node.k = k; node.items = [];
+    oldParts.delete(p.pi); byId.set(id, node);
+    return node;
+  });
+  oldParts.forEach(gone => { gone.el?.remove(); byId.delete(gone.id); });
+
   const old = new Map(day.items.map(it => [it.id, it]));
-  day.items = model.items.map((m, k) => {
-    const id = day.id + '|' + m.counter.id;
-    const node: ItemNode = old.get(id) ?? { id, lvl: 4, k, parent: day, model: m, hasKids: m.kind !== 'check', kids: [] };
-    node.k = k; node.model = m; node.hasKids = m.kind !== 'check';
+  day.items = model.items.map((m, gk) => {
+    const id = day.id + '|' + m.counter.id, part = day.parts.find(p => p.pi === m.part)!;
+    const node: ItemNode = old.get(id) ?? { id, lvl: 5, k: 0, gk, parent: part, day, model: m, hasKids: false, kids: [] };
+    node.gk = gk; node.parent = part; node.k = part.items.length; node.model = m; node.hasKids = m.kind !== 'check';
+    part.items.push(node);
     old.delete(id); byId.set(id, node);
     return node;
   });
   old.forEach(gone => { gone.el?.remove(); byId.delete(gone.id); });
-  const oldParts = new Map(day.parts.map(p => [p.pi, p]));
-  day.parts = model.parts.map(p => {
-    const keep = oldParts.get(p.pi);
-    oldParts.delete(p.pi);
-    return keep ?? { pi: p.pi, id: day.id + 'p' + p.pi, name: p.name };
-  });
-  oldParts.forEach(gone => gone.el?.remove());
 }

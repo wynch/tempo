@@ -10,11 +10,14 @@ import { seed } from '../store/seed.ts';
 import { closeSheet, openCounters, openEditor, sheetOpen, type EditorHost } from '../ui/editor.ts';
 import { clamp, ease, hhmm, lerp, mmss, smooth, spanText } from '../util.ts';
 import { HEAD, layout, P, stepId, type Box, type Layout } from './layout.ts';
-import { buildYear, syncItems, type AnyNode, type Cell, type ItemNode, type KidView } from './tree.ts';
+import { buildYear, syncItems, type AnyNode, type Cell, type ItemNode, type KidView, type PartNode } from './tree.ts';
 
 /** A circuit being played. Kept after it ends so its rows can settle; replaced when it is played again. */
 interface Run { idx: number; t: number; playing: boolean; cur: number[]; p: number[]; prog: number }
-type Key = 'z' | 'f0' | 'f1' | 'f2' | 'f3';
+type Key = 'z' | 'f0' | 'f1' | 'f2' | 'f3' | 'f4';
+const isCell = (n: AnyNode): n is Cell => n.lvl < 4;
+/** The deepest depth: an opened item. */
+const DEEP = 5;
 const fKey = (l: number): Key => ('f' + l) as Key;
 
 const el = (tag: string, cls: string, parent: Element | null, html?: string): HTMLElement => {
@@ -38,7 +41,8 @@ function place(e: HTMLElement, x: number, y: number, w: number, h: number): void
 export function start(db: Db): void {
   const stage = byIdEl('stage'), surface = byIdEl('surface'), nowEl = byIdEl('now'), ctl = byIdEl('ctl');
   const playBtn = ctl.querySelector<HTMLElement>('.play')!, menu = byIdEl('menu'), fileInput = byIdEl('file') as HTMLInputElement;
-  const crumbs = [0, 1, 2, 3].map(l => { const b = el('button', 'crumb', byIdEl('crumbs')); b.dataset.act = 'crumb'; b.dataset.l = String(l); return b; });
+  const brand = stage.querySelector<HTMLElement>('.brand')!;
+  const crumbs = [0, 1, 2, 3, 4].map(l => { const b = el('button', 'crumb', byIdEl('crumbs')); b.dataset.act = 'crumb'; b.dataset.l = String(l); return b; });
 
   /* ---- the clock and the derived days ---- */
   let nowMs = Date.now(), nowMin = minutesOfDay(nowMs);
@@ -61,8 +65,9 @@ export function start(db: Db): void {
   }
 
   /* ---- state: depth, the focused child at each level (month, week, day, item), the filter ---- */
-  const S = today ? { filter: 'all', z: 3, f0: todayMonth!.k, f1: todayWeek!.k, f2: today.k, f3: 0, rb: 0 }
-    : { filter: 'all', z: 0, f0: 0, f1: 0, f2: 0, f3: 0, rb: 0 };
+  // depth (0 year … 3 day, 4 part of day, 5 item) and the focused child at each level: month, week, day, part, item
+  const S = today ? { filter: 'all', z: 3, f0: todayMonth!.k, f1: todayWeek!.k, f2: today.k, f3: 0, f4: 0, rb: 0 }
+    : { filter: 'all', z: 0, f0: 0, f1: 0, f2: 0, f3: 0, f4: 0, rb: 0 };
   let W = 0, H = 0, dirty = true, L: Layout = {};
   const tweens: Partial<Record<Key, { from: number; to: number; t0: number; ms: number }>> = {};
   function glide(key: Key, to: number, ms?: number): void {
@@ -75,10 +80,13 @@ export function start(db: Db): void {
     for (let j = 0; j < l && j < 3; j++) n = n.kids[clamp(Math.round(S[fKey(j)]), 0, n.kids.length - 1)]!;
     return n;
   }
-  const focusItem = (): ItemNode | undefined => { const d = focusCell(3); return d.items[clamp(Math.round(S.f3), 0, d.items.length - 1)]; };
-  /** The open node at a depth: a cell for 0..3, the focused item for 4. */
-  const focusAt = (l: number): AnyNode | undefined => (l >= 4 ? focusItem() : focusCell(l));
-  const kidCount = (l: number): number => (l >= 3 ? focusCell(3).items.length : focusCell(l).kids.length);
+  const focusPart = (): PartNode | undefined => { const d = focusCell(3); return d.parts[clamp(Math.round(S.f3), 0, d.parts.length - 1)]; };
+  const focusItem = (): ItemNode | undefined => { const p = focusPart(); return p?.items[clamp(Math.round(S.f4), 0, p.items.length - 1)]; };
+  /** The open node at a depth: a cell for 0..3, the focused part of day for 4, the focused item for 5. */
+  const focusAt = (l: number): AnyNode | undefined => (l >= DEEP ? focusItem() : l === 4 ? focusPart() : focusCell(l));
+  const kidCount = (l: number): number => (l >= 4 ? focusPart()?.items.length ?? 0 : l === 3 ? focusCell(3).parts.length : focusCell(l).kids.length);
+  /** Makes an item the focus, part and all. */
+  const focusOn = (it: ItemNode): void => { setDirect('f3', it.parent.k); setDirect('f4', it.k); };
   const clearSigs = (n: Cell | null): void => { for (; n; n = n.parent) n.sig = ''; };
 
   /* ---- runs ---- */
@@ -129,7 +137,7 @@ export function start(db: Db): void {
   function setFilter(k: string): void {
     S.filter = k;
     tree.byId.forEach(n => {
-      if (n.lvl === 4) return;
+      if (!isCell(n)) return;
       n.sig = '';
       if (n.lvl === 3) paintDay(n); else if (n.lvl === 1 && n.sum) n.sum.textContent = monthText(n);
     });
@@ -154,7 +162,7 @@ export function start(db: Db): void {
   function ensureItem(it: ItemNode): void {
     if (it.el) return;
     const c = it.model.counter;
-    it.el = el('div', 'item' + (it.hasKids ? ' haskids' : '') + (it.model.optional ? ' optional' : ''), it.parent.body!);
+    it.el = el('div', 'item' + (it.hasKids ? ' haskids' : '') + (it.model.optional ? ' optional' : ''), it.day.body!);
     it.el.style.setProperty('--c', 'var(--c-' + c.color + ')');
     el('div', 'card', it.el);
     it.mark = el('div', 'mark', it.el, '<i></i>');
@@ -206,7 +214,7 @@ export function start(db: Db): void {
     } else if (m.kind === 'avoid') {
       const last = m.ticks[m.ticks.length - 1];
       p = m.n ? 1 : 0; num = m.n ? String(m.n) : ''; glyph = '+1';
-      meas = !last ? 'none' : m.n + (it.parent.model!.today ? ' · ' + spanText((nowMs - last.at) / 60000) + ' since last' : ' that day');
+      meas = !last ? 'none' : m.n + (it.day.model!.today ? ' · ' + spanText((nowMs - last.at) / 60000) + ' since last' : ' that day');
     } else {
       const steps = m.steps, seq = m.counter.sequence!;
       if (live(run, it)) {
@@ -269,8 +277,9 @@ export function start(db: Db): void {
       syncItems(d, tree.byId);
       paintDay(d);
     });
-    tree.byId.forEach(n => { if (n.lvl === 4) return; n.sig = ''; if (n.sum) n.sum.textContent = monthText(n); fillTray(n); });
-    setDirect('f3', clamp(S.f3, 0, Math.max(0, focusCell(3).items.length - 1)));
+    tree.byId.forEach(n => { if (!isCell(n)) return; n.sig = ''; if (n.sum) n.sum.textContent = monthText(n); fillTray(n); });
+    setDirect('f3', clamp(S.f3, 0, Math.max(0, focusCell(3).parts.length - 1)));
+    setDirect('f4', clamp(S.f4, 0, Math.max(0, (focusPart()?.items.length ?? 1) - 1)));
     showEmpty();
     dirty = true;
   }
@@ -318,6 +327,13 @@ export function start(db: Db): void {
     applyDay(n, s);
   }
 
+  /** The hours a part of day covers, for its title: from its start to the start of the next one. */
+  function partHours(pi: number): string {
+    const parts = db.settings.parts, p = parts[pi - 1];
+    if (!p) return '';
+    const next = parts[pi];
+    return hhmm(p.start) + '–' + (next ? hhmm(next.start) : '24:00');
+  }
   function applyDay(n: Cell, s: Box): void {
     const body = n.body!, first = n.items[0];
     const shown = !!first && !!L[first.id], iv = shown ? smooth(14, 26, s.w) : 0;
@@ -328,8 +344,14 @@ export function start(db: Db): void {
     body.style.opacity = lerp(iv * (one ? 0.3 : 1), 1, s.r).toFixed(3);
     n.parts.forEach(p => {
       const q = L[p.id]; if (!q) return;
-      if (!p.el) { p.el = el('div', 'part', body, p.name); p.el.dataset.part = db.settings.parts[p.pi - 1]?.id ?? ''; }
-      place(p.el, q.x, q.y, q.w, q.h); p.el.style.opacity = q.o.toFixed(3);
+      if (!p.el) {
+        // the heading of a part of day; once the part is open it is its title, with the hours it covers
+        p.el = el('div', 'part', body);
+        el('b', '', p.el).textContent = p.name;
+        el('span', '', p.el).textContent = partHours(p.pi);
+        p.el.dataset.id = p.id; p.el.dataset.part = db.settings.parts[p.pi - 1]?.id ?? '';
+      }
+      place(p.el, q.x, q.y, q.w, q.h); p.el.style.opacity = q.o.toFixed(3); p.el.style.setProperty('--m', q.m.toFixed(3));
     });
     n.items.forEach(it => {
       const q = L[it.id]; if (!q) return;
@@ -357,15 +379,18 @@ export function start(db: Db): void {
   }
 
   function apply(): void {
-    L = layout(root, { z: S.z, f: [S.f0, S.f1, S.f2, S.f3], W, H, cur: it => runOf(it)?.cur ?? null });
+    L = layout(root, { z: S.z, f: [S.f0, S.f1, S.f2, S.f3, S.f4], W, H, cur: it => runOf(it)?.cur ?? null });
     applyCell(root);
     placeNow();
-    const it = focusItem(), o = it?.model.kind === 'session' ? smooth(3.5, 3.92, S.z) : 0;
+    const it = focusItem(), o = it?.model.kind === 'session' ? smooth(DEEP - 0.5, DEEP - 0.08, S.z) : 0;
     ctl.style.opacity = String(o); ctl.style.pointerEvents = o > 0.5 ? 'auto' : 'none';
     const g = it && runOf(it)?.playing ? '❚❚' : '▶';
     if (playBtn.textContent !== g) playBtn.textContent = g;
+    const bo = 1 - clamp(S.z - 0.6, 0, 1);            // the brand makes room for the breadcrumb
+    brand.style.opacity = String(bo); brand.style.maxWidth = px(bo * 70); brand.style.marginRight = px(bo * 8 - 8);
     crumbs.forEach((b, l) => {
-      const co = clamp((S.z - l) * 1.7 - 0.35, 0, 1), txt = focusCell(l).crumb;
+      // a crumb appears as its cell is zoomed past, and gives way again once three newer ones follow it
+      const co = clamp((S.z - l) * 1.7 - 0.35, 0, 1) * (1 - clamp((S.z - l - 3.2) * 1.7, 0, 1)), txt = l === 4 ? focusPart()?.crumb ?? '' : focusCell(l).crumb;
       b.style.opacity = String(co); b.style.maxWidth = px(co * 90); b.style.pointerEvents = co > 0.5 ? 'auto' : 'none';
       if (b.textContent !== txt) b.textContent = txt;
     });
@@ -450,10 +475,10 @@ export function start(db: Db): void {
     while (r.idx < n && r.t >= steps[r.idx]!.seconds!) { r.t -= steps[r.idx]!.seconds!; r.p[r.idx] = 1; r.idx++; }
     if (r.idx >= n) {
       r.playing = false; r.t = 0; r.prog = 1;
-      const day = it.parent.model!;
+      const day = it.day.model!;
       // the session goes into the log: now if it is today's, else at midday of the day it was played for
       db.addTick({ counterId: it.model.counter.id, at: day.today ? Date.now() : atMinute(day.key, 12 * 60), seconds: it.model.seconds });
-      if (S.z > 3.5 && focusItem() === it) setTimeout(() => glide('z', 3, P.glide * 1.3), 500);   // fold back into the day
+      if (S.z > DEEP - 0.5 && focusItem() === it) setTimeout(() => glide('z', 3, P.glide * 1.3), 500);   // fold back into the day
       return;
     }
     r.p[r.idx] = r.t / steps[r.idx]!.seconds!;
@@ -509,18 +534,19 @@ export function start(db: Db): void {
   // when a zoom starts at a resting depth, the cell under the fingers becomes the focus
   function pickFocus(x: number, y: number): void {
     const Lc = Math.floor(S.z + 1e-6);
-    if (Lc > 3 || S.z - Lc > 0.08) return;
+    if (Lc >= DEEP || S.z - Lc > 0.08) return;
     const n = upTo(nodeAt(document.elementFromPoint(x, y)), Lc + 1);
     if (n && n.lvl === Lc + 1 && n.parent === focusAt(Lc)) setDirect(fKey(Lc), n.k);
-    else if (Lc === 3) pickDefaultItem();
+    else if (Lc === 4) pickDefaultItem();
   }
+  /** Going into a part with nothing under the fingers: prefer an item that has an inside. */
   function pickDefaultItem(): void {
-    const d = focusCell(3), cur = focusItem();
-    if (cur && !cur.hasKids) setDirect('f3', Math.max(0, d.items.findIndex(it => it.hasKids)));
+    const p = focusPart(), cur = focusItem();
+    if (p && cur && !cur.hasKids) setDirect('f4', Math.max(0, p.items.findIndex(it => it.hasKids)));
   }
   function zoomTo(z: number, x: number, y: number): void {
     const before = S.z;
-    setDirect('z', clamp(z, 0, 4));
+    setDirect('z', clamp(z, 0, DEEP));
     if (Math.floor(S.z + 1e-6) > Math.floor(before + 1e-6)) pickFocus(x, y);
   }
   function settle(): void {
@@ -570,7 +596,7 @@ export function start(db: Db): void {
       // sideways on a row of the open day: the row follows the finger and shows what letting go will do
       const row = rowAt(g.target);
       endPress();
-      if (row && Math.round(S.z) === 3 && row.parent === focusCell(3)) { g.mode = 'swipe'; g.item = row; row.el!.classList.add('swiping'); }
+      if (row && rowsAreLive() && row.day === focusCell(3)) { g.mode = 'swipe'; g.item = row; row.el!.classList.add('swiping'); }
       else g.mode = 'none';
       return;
     }
@@ -627,13 +653,15 @@ export function start(db: Db): void {
   let holdT = 0, pressed: HTMLElement | null = null;
   const rowAt = (t: Element | null): ItemNode | undefined => {
     const n = nodeAt(t);
-    return n && n.lvl === 4 && n.el?.classList.contains('row') ? n : undefined;
+    return n && n.lvl === 5 && n.el?.classList.contains('row') ? n : undefined;
   };
+  /** Rows can be swiped and the day long-pressed while the day or one of its parts is the open cell. */
+  const rowsAreLive = (): boolean => { const Lc = Math.round(S.z); return Lc === 3 || Lc === 4; };
   function endPress(): void { clearTimeout(holdT); pressed?.classList.remove('pressing'); pressed = null; }
   function hold(t: Element): void {
     const row = rowAt(t);
     if (row) { openEditor(host, row.model.counter.id); return; }
-    if (Math.round(S.z) !== 3 || t.closest('[data-act]')) return;
+    if (!rowsAreLive() || t.closest('[data-act]')) return;
     const n = nodeAt(t);
     if (n && upTo(n, 3) === focusCell(3)) openEditor(host, null, { part: t.closest<HTMLElement>('.part')?.dataset.part ?? '' });
   }
@@ -666,6 +694,7 @@ export function start(db: Db): void {
     const l = Number(key[1]), max = kidCount(l) - 1, to = Math.round(S[key]) + dir;
     if (to >= 0 && to <= max) { glide(key, to, 320); return; }
     if (l === 2) { crossWeek(dir); return; }
+    if (l === 4) { crossPart(dir); return; }
     if (l !== 1) { glide(key, clamp(to, 0, Math.max(0, max)), 320); return; }
     const month = focusCell(1), cur = focusCell(2), twin = dir > 0 ? cur.twinNext : cur.twinPrev;
     const nm = root.kids[month.k + dir]; if (!nm) return;      // edge of the year
@@ -691,17 +720,36 @@ export function start(db: Db): void {
     }, ms + 20);
   }
 
+  // The last item of a part to the first of the next (or back): out to the part, across, back into the item.
+  function crossPart(dir: number): void {
+    const part = focusPart(), next = part && focusCell(3).parts[part.k + dir];
+    if (!next || !next.items.length) return;
+    const id = ++seq, ms = 240;
+    glide('z', 4, ms);
+    setTimeout(() => {
+      if (id !== seq) return;
+      setDirect('z', 4);
+      glide('f3', next.k, 320);
+      setDirect('f4', dir > 0 ? 0 : next.items.length - 1);
+      setTimeout(() => { if (id === seq) glide('z', DEEP, ms + 60); }, 340);
+    }, ms + 20);
+  }
+
   function tap(t: Element): void {
     const act = t.closest<HTMLElement>('[data-act]');
     if (act) { command(act.dataset.act!, act); return; }
     if (menu.classList.contains('open')) { menu.classList.remove('open'); return; }
     let n = nodeAt(t); if (!n) return;
-    const Lc = clamp(Math.round(S.z), 0, 4), open = focusAt(Lc);
-    if (t.closest('.btn') && n.lvl === 4 && n.el!.classList.contains('row')) { action(n); return; }
+    const Lc = clamp(Math.round(S.z), 0, DEEP), open = focusAt(Lc);
+    if (t.closest('.btn') && n.lvl === 5 && n.el!.classList.contains('row')) { action(n); return; }
+    if (Lc === 3 && n.lvl === 5 && n.day === open) {      // an item tapped from the day: act on it, or go straight in, past its part
+      if (!n.hasKids) action(n); else { focusOn(n); glide('z', DEEP, P.glide * 1.25); }
+      return;
+    }
     n = upTo(n, Lc + 1)!;
     if (n.lvl === Lc + 1) {                       // a child of the open cell: go into it
       if (n.parent === open) {
-        if (n.lvl === 4 && !n.hasKids) { action(n); return; }
+        if (n.lvl === 5 && !n.hasKids) { action(n); return; }
         if (Math.abs(S.z - Lc) < 0.08) setDirect(fKey(Lc), n.k); else glide(fKey(Lc), n.k);
         glide('z', Lc + 1); return;
       }
@@ -709,10 +757,11 @@ export function start(db: Db): void {
     }
     if (n.lvl !== Lc || !open) return;
     if (n !== open) { if (n.parent === open.parent) glide(fKey(Lc - 1), n.k); return; }   // a sibling strip: move to it
-    if (n.lvl === 4) {
+    if (n.lvl === 4) { glide('z', 3); return; }           // the open part's own title: back out to the day
+    if (n.lvl === 5) {
       const kid = t.closest<HTMLElement>('.kid'), stepModel = kid ? n.model.steps[Number(kid.dataset.j)] : undefined;
       if (t.closest('.name')) openEditor(host, n.model.counter.id);
-      else if (!kid) glide('z', 3);
+      else if (!kid) glide('z', 4);
       else if (stepModel?.tickId) db.removeTick(stepModel.tickId);       // tapping a logged row takes it back
       return;
     }
@@ -722,7 +771,7 @@ export function start(db: Db): void {
 
   /** The item's own button: tick it, add one, or play it. */
   function action(it: ItemNode): void {
-    const m = it.model, day = it.parent.model!;
+    const m = it.model, day = it.day.model!;
     if (!day.past && !day.today) return;          // nothing can have happened on a day that has not come
     const at = day.today ? Date.now() : atMinute(day.key, 12 * 60);
     if (m.kind === 'check') {
@@ -732,7 +781,7 @@ export function start(db: Db): void {
     } else {
       const r = runOf(it);
       if (r?.playing) { r.playing = false; sync(it); }
-      else { startRun(it); setDirect('f3', it.k); glide('z', 4, P.glide * 1.25); }   // play: the item opens into its steps
+      else { startRun(it); focusOn(it); glide('z', DEEP, P.glide * 1.25); }   // play: the item opens into its steps
     }
     dirty = true;
   }
@@ -786,7 +835,7 @@ export function start(db: Db): void {
     const k = e.key;
     if (sheetOpen(host)) { if (k === 'Escape') closeSheet(host); return; }      // typing in the sheet is not navigation
     if (Math.round(S.z) === 0 && (k === 'ArrowDown' || k === 'ArrowUp')) { gotoYear(year + (k === 'ArrowDown' ? 1 : -1)); return; }
-    if (k === 'ArrowRight' || k === 'Enter') { const to = Math.min(4, Math.floor(S.z + 1.001)); if (to === 4) pickDefaultItem(); glide('z', to); }
+    if (k === 'ArrowRight' || k === 'Enter') { const to = Math.min(DEEP, Math.floor(S.z + 1.001)); if (to === DEEP) pickDefaultItem(); glide('z', to); }
     else if (k === 'ArrowLeft' || k === 'Escape') glide('z', Math.max(0, Math.ceil(S.z - 1.001)));
     else if (k === 'ArrowDown' || k === 'ArrowUp') {
       const Lc = Math.round(S.z); if (Lc < 1) return;
@@ -798,7 +847,7 @@ export function start(db: Db): void {
 
   function resize(): void {
     W = stage.clientWidth; H = stage.clientHeight;
-    tree.byId.forEach(n => { if (n.lvl !== 4) n.sig = ''; });
+    tree.byId.forEach(n => { if (isCell(n)) n.sig = ''; });
     dirty = true;
   }
   window.addEventListener('resize', resize);

@@ -25,7 +25,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 /* header: the breadcrumb of the cells you are inside */
 #wk{position:absolute;left:0;top:0;right:0;height:44px;z-index:5;background:var(--paper);border-bottom:1px solid var(--line);
   display:flex;align-items:center;gap:8px;padding:0 12px 0 14px;overflow:hidden}
-#wk .brand{color:var(--mute);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+#wk .brand{color:var(--mute);font-size:12px;letter-spacing:.08em;text-transform:uppercase;overflow:hidden;white-space:nowrap;flex:none}
 #crumbs{display:flex;align-items:center;min-width:0}
 .crumb{font-weight:600;white-space:nowrap;overflow:hidden;padding:6px 0}
 .crumb+.crumb::before{content:"›";color:var(--mute);font-weight:400;margin:0 6px}
@@ -60,8 +60,13 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .today>.lab b,.today>.lab span{color:var(--now)}
 .nbody{overflow:hidden}
 
-.part{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);
-  display:flex;align-items:flex-end;padding:0 4px 5px;overflow:hidden;white-space:nowrap}
+/* the heading of a part of day; it grows into a title as the part opens (--m) */
+.part{--m:0;z-index:2;display:flex;align-items:flex-end;gap:8px;padding:0 16px calc(5px + 5px*var(--m));overflow:hidden;white-space:nowrap;
+  text-transform:uppercase;letter-spacing:calc(.08em - .05em*var(--m));font-size:calc(11px + 6px*var(--m));
+  color:color-mix(in srgb,var(--ink) calc(var(--m)*100%),var(--mute));
+  background:color-mix(in srgb,var(--paper) calc(var(--m)*100%),transparent)}
+.part b{font-weight:calc(400 + 250*var(--m))}
+.part span{font-size:12px;letter-spacing:.02em;color:var(--mute);opacity:var(--m);font-variant-numeric:tabular-nums}
 
 /* an item is one element at every depth: mark -> row -> opened */
 .item{--r:0;--m:0;--p:0;--co:0}

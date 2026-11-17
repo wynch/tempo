@@ -4,7 +4,7 @@ Recurring task counters, seen at every scale of time: from a 40-second step of a
 
 **Open it: https://wynch.github.io/tempo/**
 
-One surface, one gesture. Pinch or scroll to change depth (year, month, week, day, item); tap to go in; drag to move to a neighbour. A counter is the same thing at every depth: a mark in the year, a row in the day, a list of steps when opened.
+One surface, one gesture. Pinch or scroll to change depth (year, month, week, day, part of day, item); tap to go in; drag to move to a neighbour. A counter is the same thing at every depth: a mark in the year, a row in the day, a list of steps when opened.
 
 - **Check, count, avoid, or play.** Tick a habit, add one to a count, log something you want less of, or run a timed circuit.
 - **Any rhythm.** Every day, some weekdays, or so many times a week or a month.
